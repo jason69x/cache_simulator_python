@@ -1,5 +1,9 @@
 import math
 import random
+from collections import OrderedDict
+
+CACHE_ACCESS_TIME = 1  # nanoseconds
+MAIN_MEMORY_ACCESS_TIME = 90
 
 
 class CacheLine:
@@ -12,7 +16,7 @@ class CacheLine:
 class CacheSet:
     def __init__(self, block_size, associativity):
         self.use = 0
-        self.ways = [CacheLine(block_size) for l in range(associativity)]
+        self.ways = OrderedDict()
 
 
 class Cache:
@@ -40,48 +44,34 @@ class Cache:
             (1 << self.set_bits) - 1
         )
         block_no = (addr >> self.BYTE_OFFSET) & ((1 << self.block_offset) - 1)
-        hit, data = self.comparator(self.cache[set_no], tag_no, block_no)
+        hit, data, hit_set, hit_tag = self.LRU_find(set_no, tag_no, block_no)
 
         if hit == True:
-            return (hit, data)
-        data = self.get_data_memory(set_no, tag_no, block_no)
-        return (hit, data)
+            return (hit, data, hit_set, hit_tag)
+        data, hit_set, hit_tag = self.get_data_memory(set_no, tag_no, block_no)
+        return (hit, data, hit_set, hit_tag)
 
-    def comparator(self, cache_set, tag_no, block_no):
-
-        for way_no, way in enumerate(cache_set.ways):
-            if way.valid == 0:
-                continue
-            if way.tag == tag_no:
-                if self.associativity > 1:
-                    cache_set.use = 1 if way_no >= self.associativity // 2 else 0
-                return (True, way.data[block_no])
-
-        return (False, None)
+    def LRU_find(self, set_no, tag_no, block_no):
+        for tag, line in self.cache[set_no].ways.items():
+            if line.valid == 1 and tag == tag_no:
+                self.cache[set_no].ways.move_to_end(tag_no, last=False)
+                return (True, line.data[block_no], set_no, tag_no)
+        return (False, None, None, None)
 
     def get_data_memory(self, set_no, tag_no, block_no):
 
         data = [random.randint(0, 100) for r in range(self.block_size)]
-        if self.associativity == 1:
-            evict_way = 0
-        elif self.associativity > 2:
-            if self.cache[set_no].use == 0:
-                evict_way = random.randint(0, self.associativity // 2 - 1)
-                self.cache[set_no].use = 1
-            else:
-                evict_way = random.randint(
-                    self.associativity // 2, self.associativity - 1
-                )
-                self.cache[set_no].use = 0
-        else:
-            evict_way = self.cache[set_no].use
-            self.cache[set_no].use = 0 if self.cache[set_no].use == 1 else 1
+        self.LRU_load(set_no, tag_no, block_no, data)
+        return data[block_no], set_no, tag_no
 
-        self.cache[set_no].ways[evict_way].valid = 1
-        self.cache[set_no].ways[evict_way].tag = tag_no
-        self.cache[set_no].ways[evict_way].data = data
-
-        return data[block_no]
+    def LRU_load(self, set_no, tag_no, block_no, data):
+        if len(self.cache[set_no].ways) == self.associativity:
+            self.cache[set_no].ways.popitem(last=True)
+        self.cache[set_no].ways[tag_no] = CacheLine(self.block_size)
+        self.cache[set_no].ways[tag_no].valid = 1
+        self.cache[set_no].ways[tag_no].tag = tag_no
+        self.cache[set_no].ways[tag_no].data = data
+        self.cache[set_no].ways.move_to_end(tag_no, last=False)
 
 
 capacity = int(input("cache capacity (no. of words cache stores) : "))
@@ -97,17 +87,21 @@ with open("addr_file.txt", "r") as file:
     total_access = 0
     for addr in file:
         addr = int(addr.strip())
-        hit, data = cache.get_data(addr)
+        hit, data, hit_set, hit_tag = cache.get_data(addr)
         if hit == True:
             total_hit += 1
             print("HIT ", "addr: ", addr)
+            print("set: ", hit_set)
+            print("tag: ", hit_tag)
             print("data: ", data)
         else:
             total_miss += 1
             print("MISS", "addr: ", addr)
-            print("data MM: ", data)
         total_access += 1
         print()
     print("-------------------------")
-    print("HIT RATE: ", (total_hit / total_access) * 100, "%")
-    print("MISS RATE: ", (total_miss / total_access) * 100, "%")
+    hit_rate = (total_hit / total_access) * 100
+    miss_rate = (total_miss / total_access) * 100
+    print("HIT RATE:", hit_rate, "%")
+    print("MISS RATE:", miss_rate, "%")
+    print("AMAT: ", (CACHE_ACCESS_TIME + miss_rate * (MAIN_MEMORY_ACCESS_TIME)), "ns")
