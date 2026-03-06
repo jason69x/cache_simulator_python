@@ -149,7 +149,15 @@ class Cache:
             (1 << self.set_bits) - 1
         )
         block_no = (addr >> self.BYTE_OFFSET) & ((1 << self.block_offset) - 1)
-        return (tag_no, set_no, block_no)
+        return (set_no, tag_no, block_no)
+
+    def print_cache(self):
+        for i, set in enumerate(self.cache):
+            print("set", i)
+            for i, (tag, line) in enumerate(set.ways.items()):
+                print("->way", i)
+                print("tag:", tag, "valid:", line.valid, "dirty:", line.dirty)
+                print("data:", line.data)
 
 
 capacity = int(input("cache capacity (no. of words cache stores) = "))
@@ -194,6 +202,8 @@ with open("addr_file.txt", "r") as file:
             print("MISS", "addr: ", addr)
         total_access += 1
         print()
+    print("-------------------------")
+    print(cache.print_cache())
     print("-------------------------")
     hit_rate = total_hit / total_access
     miss_rate = total_miss / total_access
