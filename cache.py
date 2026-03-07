@@ -40,8 +40,10 @@ class CacheLine:
 
 # cache set structure
 class CacheSet:
-    def __init__(self):
+    def __init__(self, associativity, block_size):
         self.ways = OrderedDict()
+        self.plru_set = [None] * associativity
+        self.plru_bits = [0] * (associativity - 1)
 
 
 # main cache structure
@@ -58,10 +60,12 @@ class Cache:
         associativity,
         write_hit_policy,
         write_miss_policy,
+        eviction_policy,
     ):
         self.main_memory = main_memory
         self.write_hit_policy = write_hit_policy
         self.write_miss_policy = write_miss_policy
+        self.eviction_policy = eviction_policy
         total_blocks = capacity // block_size
         total_sets = total_blocks // associativity
         self.associativity = associativity
@@ -73,11 +77,14 @@ class Cache:
             self.ADDRESS_SIZE - self.set_bits - self.block_offset - self.BYTE_OFFSET
         )
 
-        self.cache = [CacheSet() for _ in range(total_sets)]
+        self.cache = [CacheSet(associativity, block_size) for _ in range(total_sets)]
 
     def read_cache(self, addr):
         set_no, tag_no, block_no = self.decode_addr(addr)
-        hit, data, hit_set, hit_tag = self.LRU_find(set_no, tag_no, block_no)
+        if self.eviction_policy == 0:
+            hit, data, hit_set, hit_tag = self.LRU_find(set_no, tag_no, block_no)
+        else:
+            hit, data, hit_set, hit_tag = self.PLRU_find(set_no, tag_no, block_no)
 
         if hit == True:
             return (hit, data, hit_set, hit_tag)
@@ -86,7 +93,10 @@ class Cache:
 
     def write_cache(self, addr, new_data):
         set_no, tag_no, block_no = self.decode_addr(addr)
-        hit, data, hit_set, hit_tag = self.LRU_find(set_no, tag_no, block_no)
+        if self.eviction_policy == 0:
+            hit, data, hit_set, hit_tag = self.LRU_find(set_no, tag_no, block_no)
+        else:
+            hit, data, hit_set, hit_tag = self.PLRU_find(set_no, tag_no, block_no)
 
         block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
         if hit == True:
@@ -121,12 +131,31 @@ class Cache:
                 return (True, line.data[block_no], set_no, tag_no)
         return (False, None, None, None)
 
+    def PLRU_find(self, set_no, tag_no, block_no):
+        for line_no, line in enumerate(self.cache[set_no].plru_set):
+            if line != None and line.tag == tag_no:
+                # update plru_bits
+                parent = (line_no + self.associativity - 2) // 2
+                while parent >= 0:
+                    if line_no % 2 == 0:
+                        self.cache[set_no].plru_bits[parent] = 1
+                    else:
+                        self.cache[set_no].plru_bits[parent] = 0
+                    line_no = parent
+                    parent = (parent - 1) // 2
+                return (True, line.data[block_no], set_no, tag_no)
+        return (False, None, None, None)
+
     def get_data_memory(self, addr, set_no, tag_no, block_no):
 
         block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
 
         data = self.main_memory.read_mm(block_addr, self.block_size)
-        self.LRU_load(addr, set_no, tag_no, block_no, data)
+        if self.eviction_policy == 0:
+            self.LRU_load(addr, set_no, tag_no, block_no, data)
+        else:
+            self.PLRU_load(addr, set_no, tag_no, block_no, data)
+
         return data[block_no], set_no, tag_no
 
     def LRU_load(self, addr, set_no, tag_no, block_no, data):
@@ -137,11 +166,47 @@ class Cache:
                 self.main_memory.write_mm(
                     block_addr, block_no, self.block_size, evicted_line.data, 1
                 )
-        self.cache[set_no].ways[tag_no] = CacheLine(self.block_size)
-        self.cache[set_no].ways[tag_no].valid = 1
-        self.cache[set_no].ways[tag_no].tag = tag_no
-        self.cache[set_no].ways[tag_no].data = data.copy()
+        new_line = CacheLine(self.block_size)
+        new_line.valid = 1
+        new_line.tag = tag_no
+        new_line.data = data.copy()
+        self.cache[set_no].ways[tag_no] = new_line
         self.cache[set_no].ways.move_to_end(tag_no, last=False)
+
+    def PLRU_load(self, addr, set_no, tag_no, block_no, data):
+        load_at = None
+        for line_no, line in enumerate(self.cache[set_no].plru_set):
+            if line is None:
+                load_at = line_no
+                break
+        if load_at is None:
+            i = 0
+            while i < (self.associativity - 1):
+                if self.cache[set_no].plru_bits[i] == 0:
+                    i = 2 * i + 2
+                else:
+                    i = 2 * i + 1
+            load_at = i - (self.associativity - 1)
+            evicted_line = self.cache[set_no].plru_set[load_at]
+            if evicted_line.dirty == 1 and self.write_hit_policy == 1:
+                block_addr = (evicted_line.tag << self.set_bits) | set_no
+                self.main_memory.write_mm(
+                    block_addr, block_no, self.block_size, evicted_line.data, 1
+                )
+
+        new_line = CacheLine(self.block_size)
+        new_line.valid = 1
+        new_line.tag = tag_no
+        new_line.data = data.copy()
+        self.cache[set_no].plru_set[load_at] = new_line
+        parent = (load_at + self.associativity - 2) // 2
+        while parent >= 0:
+            if load_at % 2 == 0:
+                self.cache[set_no].plru_bits[parent] = 1
+            else:
+                self.cache[set_no].plru_bits[parent] = 0
+            load_at = parent
+            parent = (parent - 1) // 2
 
     def decode_addr(self, addr):
         tag_no = addr >> (self.set_bits + self.block_offset + self.BYTE_OFFSET)
@@ -169,6 +234,7 @@ write_hit_policy = int(
 write_miss_policy = int(
     input("write miss policy: \n(0->write-allocate 1-> write-around) = ")
 )
+eviction_policy = int(input("eviction_policy: \n(0->True-LRU 1->Pseudo-LRU) = "))
 print("--------------------------------")
 
 main_memory = MainMemory()
@@ -179,6 +245,7 @@ cache = Cache(
     associativity,
     write_hit_policy,
     write_miss_policy,
+    eviction_policy,
 )
 
 with open("addr_file.txt", "r") as file:
