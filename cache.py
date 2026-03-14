@@ -92,7 +92,7 @@ class Cache:
         total_sets = self.total_blocks // associativity
         self.associativity = associativity
         self.block_size = block_size
-
+        self.capacity = capacity
         self.set_bits = math.ceil(math.log2(total_sets))
         self.block_offset = math.ceil(math.log2(block_size // (WORD_SIZE // 8)))
         self.tag_bits = (
@@ -194,10 +194,10 @@ class Cache:
 
     def LRU_load(self, set_no, tag_no, block_no, data, write_data, write):
         if len(self.cache[set_no].ways) == self.associativity:
-            self.dirty_evictions += 1
             evicted_tag, evicted_line = self.cache[set_no].ways.popitem(last=True)
             # if cache line is dirty and write_back policy is used then write evicted data to memory
             if evicted_line.dirty == 1 and self.write_policy == "write_back":
+                self.dirty_evictions += 1
                 block_addr = (evicted_tag << self.set_bits) | set_no
                 self.main_memory.write_mm(
                     block_addr, block_no, self.block_size, evicted_line.data, 1
@@ -226,8 +226,8 @@ class Cache:
                     i = 2 * i + 1
             load_at = i - (self.associativity - 1)
             evicted_line = self.cache[set_no].plru_set[load_at]
-            self.dirty_evictions += 1
             if evicted_line.dirty == 1 and self.write_policy == "write_back":
+                self.dirty_evictions += 1
                 block_addr = (evicted_line.tag << self.set_bits) | set_no
                 self.main_memory.write_mm(
                     block_addr, block_no, self.block_size, evicted_line.data, 1
@@ -359,17 +359,25 @@ with open(args.trace, "r") as file:
     # print("-------------------------")
     hit_rate = total_hit / total_access
     miss_rate = total_miss / total_access
-    print("total access:", total_access)
-    print("total_read:", total_read)
-    print("total_write:", total_write)
-    print("total_hit:", total_hit)
-    print("total_miss:", total_miss)
-    print("dirty_evictions:", cache.dirty_evictions)
-    # print("total memory access:", main_memory.TOTAL_ACCESS)
-    # print("total cache access:", cache.TOTAL_ACCESS)
-    print("compulsory_misses:", cache.compulsory_misses)
-    print("conflict_misses:", cache.conflict_misses)
-    print("capacity_misses:", cache.capacity_misses)
-    print(f"HIT RATE: {hit_rate * 100:.2f}%")
-    print(f"MISS RATE: {miss_rate * 100:.2f}%")
-    print(f"AMAT: {cache_hit_time + miss_rate * (cache_miss_time):.2f} ns")
+    with open("output.txt", "w") as output:
+        output.write("Cache Configuration -> \n\n")
+        output.write(f"Cache Size: {cache.capacity//1024} KB\n")
+        output.write(f"Block Size: {cache.block_size} B\n")
+        output.write(f"Associativity: {cache.associativity}-way\n")
+        output.write(f"Replacement: {cache.eviction_policy}\n")
+        output.write(f"Write Policy: {cache.write_policy}\n")
+        output.write(f"Write Allocate: {cache.write_allocate}\n")
+        output.write("\n-----------------------------\n")
+        output.write("Statistics -> \n\n")
+        output.write(f"Total Accesses: {total_access}\n")
+        output.write(f"Reads: {total_read}\n")
+        output.write(f"Writes: {total_write}\n\n")
+        output.write(f"Hits: {total_hit}\n")
+        output.write(f"Misses: {total_miss}\n")
+        output.write(f"Dirty Evictions: {cache.dirty_evictions}\n\n")
+        output.write(f"Compulsory Misses: {cache.compulsory_misses}\n")
+        output.write(f"Conflict Misses: {cache.conflict_misses}\n")
+        output.write(f"Capacity Misses: {cache.capacity_misses}\n\n")
+        output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
+        output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
+        output.write(f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n")

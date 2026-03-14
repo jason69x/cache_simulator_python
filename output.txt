@@ -1,0 +1,28 @@
+Cache Configuration -> 
+
+Cache Size: 32 KB
+Block Size: 64 B
+Associativity: 4-way
+Replacement: LRU
+Write Policy: write_back
+Write Allocate: yes
+
+-----------------------------
+Statistics -> 
+
+Total Accesses: 7
+Reads: 6
+Writes: 1
+
+Hits: 1
+Misses: 6
+Dirty Evictions: 1
+
+Compulsory Misses: 5
+Conflict Misses: 2
+Capacity Misses: 0
+
+Hit Rate: 14.29%
+Miss Rate: 85.71%
+
+AMAT: 19.14 ns
