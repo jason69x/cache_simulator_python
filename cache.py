@@ -1,6 +1,6 @@
 import math
 import random
-from collections import OrderedDict
+from collections import OrderedDict, deque
 import configparser
 import argparse
 
@@ -59,9 +59,12 @@ class CacheLine:
 # cache set structure
 class CacheSet:
     def __init__(self, associativity):
-        self.ways = OrderedDict()
-        self.plru_set = [None] * associativity
-        self.plru_bits = [0] * (associativity - 1)
+        self.ways = OrderedDict()  # LRU set
+        self.plru_set = [None] * associativity  # PLRU set, stores actual lines
+        self.plru_bits = [0] * (
+            associativity - 1
+        )  # PLRU data structure to find least recently used line
+        self.fifo = deque()
 
 
 # main cache structure
@@ -104,27 +107,39 @@ class Cache:
         self.fully = OrderedDict()
         self.miss_type = ""
         self.dirty_evictions = 0
-        self.compulsory_misses = 0
-        self.conflict_misses = 0
-        self.capacity_misses = 0
+        self.misses_count = {
+            "conflict": 0,
+            "capacity": 0,
+            "compulsory": 0,
+        }
 
     def read_cache(self, addr):
         self.TOTAL_ACCESS += 1
         set_no, tag_no, block_no, miss_type = self.decode_addr(addr)
         if self.eviction_policy == "LRU":
             hit, data = self.LRU_find(
-                set_no, tag_no, block_no, write_data=None, write=None
+                set_no, tag_no, block_no, write_data=None, write=False
             )
         if self.eviction_policy == "PLRU":
             hit, data = self.PLRU_find(
-                set_no, tag_no, block_no, write_data=None, write=None
+                set_no, tag_no, block_no, write_data=None, write=False
+            )
+        if self.eviction_policy == "FIFO":
+            hit, data = self.FIFO_find(
+                set_no, tag_no, block_no, write_data=None, write=False
+            )
+        if self.eviction_policy == "Random":
+            hit, data = self.Random_find(
+                set_no, tag_no, block_no, write_data=None, write=False
             )
 
         if hit == True:
             return (hit, data, set_no, tag_no, None)
+
         data = self.get_data_memory(
             addr, set_no, tag_no, block_no, write_data=None, write=False
         )
+        self.misses_count[miss_type] += 1
         return (hit, data, set_no, tag_no, miss_type)
 
     def write_cache(self, addr, new_data):
@@ -134,6 +149,10 @@ class Cache:
             hit, data = self.LRU_find(set_no, tag_no, block_no, new_data, write=True)
         if self.eviction_policy == "PLRU":
             hit, data = self.PLRU_find(set_no, tag_no, block_no, new_data, write=True)
+        if self.eviction_policy == "FIFO":
+            hit, data = self.FIFO_find(set_no, tag_no, block_no, new_data, write=True)
+        if self.eviction_policy == "Random":
+            hit, data = self.Random_find(set_no, tag_no, block_no, new_data, write=True)
 
         block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
         if hit == True:
@@ -144,6 +163,7 @@ class Cache:
                 )
             return hit, set_no, tag_no, None
         # in case of write-allocate
+        self.misses_count[miss_type] += 1
         if self.write_allocate == "yes":
             self.get_data_memory(addr, set_no, tag_no, block_no, new_data, write=True)
             return hit, set_no, tag_no, miss_type
@@ -179,6 +199,23 @@ class Cache:
                 return (True, line.data[block_no])
         return (False, None)
 
+    def Random_find(self, set_no, tag_no, block_no, write_data, write):
+        if tag_no in self.cache[set_no].ways:
+            if write:
+                self.cache[set_no].ways[tag_no].data[block_no] = write_data
+                self.cache[set_no].ways[tag_no].dirty = 1
+            return (True, self.cache[set_no].ways[tag_no].data[block_no])
+        return (False, None)
+
+    def FIFO_find(self, set_no, tag_no, block_no, write_data, write):
+        for line in self.cache[set_no].fifo:
+            if line.tag == tag_no:
+                if write:
+                    line.data[block_no] = write_data
+                    line.dirty = 1
+                return (True, line.data[block_no])
+        return (False, None)
+
     def get_data_memory(self, addr, set_no, tag_no, block_no, write_data, write):
 
         block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
@@ -189,9 +226,14 @@ class Cache:
             self.LRU_load(set_no, tag_no, block_no, data, write_data, write)
         if self.eviction_policy == "PLRU":
             self.PLRU_load(set_no, tag_no, block_no, data, write_data, write)
+        if self.eviction_policy == "FIFO":
+            self.FIFO_load(set_no, tag_no, block_no, data, write_data, write)
+        if self.eviction_policy == "Random":
+            self.Random_load(set_no, tag_no, block_no, data, write_data, write)
 
         return data[block_no]
 
+    # Load from Main Memory to LRU cache
     def LRU_load(self, set_no, tag_no, block_no, data, write_data, write):
         if len(self.cache[set_no].ways) == self.associativity:
             evicted_tag, evicted_line = self.cache[set_no].ways.popitem(last=True)
@@ -211,6 +253,7 @@ class Cache:
         self.cache[set_no].ways[tag_no] = new_line
         self.cache[set_no].ways.move_to_end(tag_no, last=False)
 
+    # Load from Main Memory to PLRU cache
     def PLRU_load(self, set_no, tag_no, block_no, data, write_data, write):
         load_at = None
         for line_no, line in enumerate(self.cache[set_no].plru_set):
@@ -250,6 +293,47 @@ class Cache:
             load_at = parent
             parent = (parent - 1) // 2
 
+    # Load from Main Memory to Random cache
+    def Random_load(self, set_no, tag_no, block_no, data, write_data, write):
+        if len(self.cache[set_no].ways) == self.associativity:
+            evicted_tag = random.choice(list(self.cache[set_no].ways))
+            evicted_line = self.cache[set_no].ways.pop(evicted_tag)
+            # if cache line is dirty and write_back policy is used then write evicted data to memory
+            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+                self.dirty_evictions += 1
+                block_addr = (evicted_tag << self.set_bits) | set_no
+                self.main_memory.write_mm(
+                    block_addr, block_no, self.block_size, evicted_line.data, 1
+                )
+        new_line = CacheLine(self.block_size)
+        new_line.valid = 1
+        new_line.tag = tag_no
+        new_line.data = data.copy()
+        if write:
+            new_line.data[block_no] = write_data
+        self.cache[set_no].ways[tag_no] = new_line
+
+    # Load from Main Memory to FIFO cache
+    def FIFO_load(self, set_no, tag_no, block_no, data, write_data, write):
+        if len(self.cache[set_no].fifo) == self.associativity:
+            evicted_line = self.cache[set_no].fifo.popleft()
+            evicted_tag = evicted_line.tag
+            # if cache line is dirty and write_back policy is used then write evicted data to memory
+            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+                self.dirty_evictions += 1
+                block_addr = (evicted_tag << self.set_bits) | set_no
+                self.main_memory.write_mm(
+                    block_addr, block_no, self.block_size, evicted_line.data, 1
+                )
+        new_line = CacheLine(self.block_size)
+        new_line.valid = 1
+        new_line.tag = tag_no
+        new_line.data = data.copy()
+        if write:
+            new_line.data[block_no] = write_data
+        self.cache[set_no].fifo.append(new_line)
+
+    # decode the given address to find tag no, set no, block no
     def decode_addr(self, addr):
         tag_no = addr >> (self.set_bits + self.block_offset + self.BYTE_OFFSET)
         set_no = (addr >> (self.block_offset + self.BYTE_OFFSET)) & (
@@ -259,12 +343,9 @@ class Cache:
         block_addr = addr >> (self.block_offset + self.BYTE_OFFSET)
         if block_addr not in self.cold_start:
             miss_type = "compulsory"
-            self.compulsory_misses += 1
         elif block_addr not in self.fully:
-            self.capacity_misses += 1
             miss_type = "capacity"
         else:
-            self.conflict_misses += 1
             miss_type = "conflict"  # add real checking
         self.cold_start.add(block_addr)
         if len(self.fully) == self.total_blocks:
@@ -375,9 +456,9 @@ with open(args.trace, "r") as file:
         output.write(f"Hits: {total_hit}\n")
         output.write(f"Misses: {total_miss}\n")
         output.write(f"Dirty Evictions: {cache.dirty_evictions}\n\n")
-        output.write(f"Compulsory Misses: {cache.compulsory_misses}\n")
-        output.write(f"Conflict Misses: {cache.conflict_misses}\n")
-        output.write(f"Capacity Misses: {cache.capacity_misses}\n\n")
+        output.write(f"Compulsory Misses: {cache.misses_count["compulsory"]}\n")
+        output.write(f"Conflict Misses: {cache.misses_count["conflict"]}\n")
+        output.write(f"Capacity Misses: {cache.misses_count["capacity"]}\n\n")
         output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
         output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
         output.write(f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n")

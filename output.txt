@@ -3,7 +3,7 @@ Cache Configuration ->
 Cache Size: 32 KB
 Block Size: 64 B
 Associativity: 4-way
-Replacement: LRU
+Replacement: FIFO
 Write Policy: write_back
 Write Allocate: yes
 
@@ -19,7 +19,7 @@ Misses: 6
 Dirty Evictions: 1
 
 Compulsory Misses: 5
-Conflict Misses: 2
+Conflict Misses: 1
 Capacity Misses: 0
 
 Hit Rate: 14.29%
