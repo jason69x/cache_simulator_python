@@ -340,6 +340,7 @@ class Cache:
             (1 << self.set_bits) - 1
         )
         block_no = (addr >> self.BYTE_OFFSET) & ((1 << self.block_offset) - 1)
+
         block_addr = addr >> (self.block_offset + self.BYTE_OFFSET)
         if block_addr not in self.cold_start:
             miss_type = "compulsory"
@@ -431,7 +432,7 @@ with open(args.trace, "r") as file:
             total_miss += 1
             print("MISS", "addr: ", addr)
             print("MISS TYPE:", miss_type)
-            if op == "W":
+            if op == "W" and cache.write_allocate == "yes":
                 print(f"block fetched from MM to set: {hit_set} tag: {hit_tag}")
         total_access += 1
         print()
