@@ -4,18 +4,6 @@ from collections import OrderedDict, deque
 import configparser
 import argparse
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--config", type=str, required=True, help="Path to config file")
-parser.add_argument("--trace", type=str, required=True, help="Path to Trace file")
-# parser.add_argument("--levels", type=int, help="no. of cache levels")
-args = parser.parse_args()
-
-# load config
-config = configparser.ConfigParser()
-config.read(args.config)
-
-MAIN_MEMORY_ACCESS_TIME = config.getint("DRAM", "access_time")
-
 
 # main memory structure (Lazy structure only stores what is accessed)
 # stores blocks of data, block addressable
@@ -112,28 +100,26 @@ class Cache:
             "capacity": 0,
             "compulsory": 0,
         }
+        self._find = {
+            "LRU": self.LRU_find,
+            "FIFO": self.FIFO_find,
+            "Random": self.Random_find,
+            "PLRU": self.PLRU_find,
+        }
+        self._load = {
+            "LRU": self.LRU_load,
+            "FIFO": self.FIFO_load,
+            "Random": self.Random_load,
+            "PLRU": self.PLRU_load,
+        }
 
     def read_cache(self, addr):
         self.TOTAL_ACCESS += 1
         set_no, tag_no, block_no, miss_type = self.decode_addr(addr)
-        if self.eviction_policy == "LRU":
-            hit, data = self.LRU_find(
-                set_no, tag_no, block_no, write_data=None, write=False
-            )
-        if self.eviction_policy == "PLRU":
-            hit, data = self.PLRU_find(
-                set_no, tag_no, block_no, write_data=None, write=False
-            )
-        if self.eviction_policy == "FIFO":
-            hit, data = self.FIFO_find(
-                set_no, tag_no, block_no, write_data=None, write=False
-            )
-        if self.eviction_policy == "Random":
-            hit, data = self.Random_find(
-                set_no, tag_no, block_no, write_data=None, write=False
-            )
-
-        if hit == True:
+        hit, data = self._find[self.eviction_policy](
+            set_no, tag_no, block_no, write_data=None, write=False
+        )
+        if hit:
             return (hit, data, set_no, tag_no, None)
 
         data = self.get_data_memory(
@@ -145,17 +131,12 @@ class Cache:
     def write_cache(self, addr, new_data):
         self.TOTAL_ACCESS += 1
         set_no, tag_no, block_no, miss_type = self.decode_addr(addr)
-        if self.eviction_policy == "LRU":
-            hit, data = self.LRU_find(set_no, tag_no, block_no, new_data, write=True)
-        if self.eviction_policy == "PLRU":
-            hit, data = self.PLRU_find(set_no, tag_no, block_no, new_data, write=True)
-        if self.eviction_policy == "FIFO":
-            hit, data = self.FIFO_find(set_no, tag_no, block_no, new_data, write=True)
-        if self.eviction_policy == "Random":
-            hit, data = self.Random_find(set_no, tag_no, block_no, new_data, write=True)
+        hit, data = self._find[self.eviction_policy](
+            set_no, tag_no, block_no, new_data, write=True
+        )
 
         block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
-        if hit == True:
+        if hit:
             # if write-through policy is used, on cache hit write data to main memory too
             if self.write_policy == "write_through":
                 self.main_memory.write_mm(
@@ -222,14 +203,9 @@ class Cache:
         # get a block of data from memory
         data = self.main_memory.read_mm(block_addr, self.block_size)
         # update this data as most recently used in eviction_policy
-        if self.eviction_policy == "LRU":
-            self.LRU_load(set_no, tag_no, block_no, data, write_data, write)
-        if self.eviction_policy == "PLRU":
-            self.PLRU_load(set_no, tag_no, block_no, data, write_data, write)
-        if self.eviction_policy == "FIFO":
-            self.FIFO_load(set_no, tag_no, block_no, data, write_data, write)
-        if self.eviction_policy == "Random":
-            self.Random_load(set_no, tag_no, block_no, data, write_data, write)
+        self._load[self.eviction_policy](
+            set_no, tag_no, block_no, data, write_data, write
+        )
 
         return data[block_no]
 
@@ -356,110 +332,105 @@ class Cache:
         return (set_no, tag_no, block_no, miss_type)
 
 
-""" print cache state ->
+def main():
 
-    def print_cache(self):
-        if eviction_policy == "LRU":
-            for i, set in enumerate(self.cache):
-                print("set", i)
-                for i, (tag, line) in enumerate(set.ways.items()):
-                    print("->way", i)
-                    print("tag:", tag, "valid:", line.valid, "dirty:", line.dirty)
-                    print("data:", line.data)
-        if eviction_policy == "PLRU":
-            for i, set in enumerate(self.cache):
-                print("set", i)
-                for i, line in enumerate(set.plru_set):
-                    if line == None:
-                        print("empty", "\n")
-                        continue
-                    print("->way", i)
-                    print("tag:", line.tag, "valid:", line.valid, "dirty:", line.dirty)
-                    print("data:", line.data, "\n")
-"""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True, help="Path to config file")
+    parser.add_argument("--trace", type=str, required=True, help="Path to Trace file")
+    # parser.add_argument("--levels", type=int, help="no. of cache levels")
+    args = parser.parse_args()
 
+    # load config
+    config = configparser.ConfigParser()
+    config.read(args.config)
 
-capacity = int(config["CACHE_L1"]["capacity"])
-block_size = int(config["CACHE_L1"]["block_size"])
-associativity = int(config["CACHE_L1"]["associativity"])
-write_policy = config["CACHE_L1"]["write_policy"]
-write_allocate = config["CACHE_L1"]["write_allocate"]
-eviction_policy = config["CACHE_L1"]["eviction_policy"]
-address_size = int(config["DRAM"]["address_size"])
-word_size = config.getint("DRAM", "word_size")
-byte_offset = config.getint("CACHE_L1", "byte_offset")
-cache_hit_time = config.getint("CACHE_L1", "hit_time")
-cache_miss_time = config.getint("CACHE_L1", "miss_time")
-print("--------------------------------")
+    MAIN_MEMORY_ACCESS_TIME = config.getint("DRAM", "access_time")
+    capacity = int(config["CACHE_L1"]["capacity"])
+    block_size = int(config["CACHE_L1"]["block_size"])
+    associativity = int(config["CACHE_L1"]["associativity"])
+    write_policy = config["CACHE_L1"]["write_policy"]
+    write_allocate = config["CACHE_L1"]["write_allocate"]
+    eviction_policy = config["CACHE_L1"]["eviction_policy"]
+    address_size = int(config["DRAM"]["address_size"])
+    word_size = config.getint("DRAM", "word_size")
+    byte_offset = config.getint("CACHE_L1", "byte_offset")
+    cache_hit_time = config.getint("CACHE_L1", "hit_time")
+    cache_miss_time = config.getint("CACHE_L1", "miss_time")
 
-main_memory = MainMemory()
-cache = Cache(
-    main_memory,
-    capacity,
-    block_size,
-    associativity,
-    write_policy,
-    write_allocate,
-    eviction_policy,
-    address_size,
-    word_size,
-    byte_offset,
-)
+    main_memory = MainMemory()
+    cache = Cache(
+        main_memory,
+        capacity,
+        block_size,
+        associativity,
+        write_policy,
+        write_allocate,
+        eviction_policy,
+        address_size,
+        word_size,
+        byte_offset,
+    )
 
-with open(args.trace, "r") as file:
-    total_hit = 0
-    total_miss = 0
-    total_access = 0
-    total_read = 0
-    total_write = 0
-    for addr in file:
-        op, addr = addr.strip().split()
-        addr = int(addr, 16)
-        if op == "R":
-            total_read += 1
-            hit, data, hit_set, hit_tag, miss_type = cache.read_cache(addr)
-        else:
-            total_write += 1
-            hit, hit_set, hit_tag, miss_type = cache.write_cache(
-                addr, random.randint(0, 100)
+    with open(args.trace, "r") as file:
+        total_hit = 0
+        total_miss = 0
+        total_access = 0
+        total_read = 0
+        total_write = 0
+        for addr in file:
+            op, addr = addr.strip().split()
+            addr = int(addr, 16)
+            if op == "R":
+                total_read += 1
+                hit, data, hit_set, hit_tag, miss_type = cache.read_cache(addr)
+            else:
+                total_write += 1
+                hit, hit_set, hit_tag, miss_type = cache.write_cache(
+                    addr, random.randint(0, 100)
+                )
+            if hit:
+                total_hit += 1
+                print("HIT ", "addr: ", addr)
+                print("set: ", hit_set)
+                print("tag: ", hit_tag)
+            else:
+                total_miss += 1
+                print("MISS", "addr: ", addr)
+                print("MISS TYPE:", miss_type)
+                if op == "W" and cache.write_allocate == "yes":
+                    print(f"block fetched from MM to set: {hit_set} tag: {hit_tag}")
+            total_access += 1
+            print()
+        print("-------------------------")
+        # cache.print_cache()
+        # print("-------------------------")
+        hit_rate = total_hit / total_access
+        miss_rate = total_miss / total_access
+        with open("output.txt", "w") as output:
+            output.write("Cache Configuration -> \n\n")
+            output.write(f"Cache Size: {cache.capacity//1024} KB\n")
+            output.write(f"Block Size: {cache.block_size} B\n")
+            output.write(f"Associativity: {cache.associativity}-way\n")
+            output.write(f"Replacement: {cache.eviction_policy}\n")
+            output.write(f"Write Policy: {cache.write_policy}\n")
+            output.write(f"Write Allocate: {cache.write_allocate}\n")
+            output.write("\n-----------------------------\n")
+            output.write("Statistics -> \n\n")
+            output.write(f"Total Accesses: {total_access}\n")
+            output.write(f"Reads: {total_read}\n")
+            output.write(f"Writes: {total_write}\n\n")
+            output.write(f"Hits: {total_hit}\n")
+            output.write(f"Misses: {total_miss}\n")
+            output.write(f"Dirty Evictions: {cache.dirty_evictions}\n\n")
+            output.write(f"Compulsory Misses: {cache.misses_count["compulsory"]}\n")
+            output.write(f"Conflict Misses: {cache.misses_count["conflict"]}\n")
+            output.write(f"Capacity Misses: {cache.misses_count["capacity"]}\n\n")
+            output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
+            output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
+            output.write(
+                f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n"
             )
-        if hit == True:
-            total_hit += 1
-            print("HIT ", "addr: ", addr)
-            print("set: ", hit_set)
-            print("tag: ", hit_tag)
-        else:
-            total_miss += 1
-            print("MISS", "addr: ", addr)
-            print("MISS TYPE:", miss_type)
-            if op == "W" and cache.write_allocate == "yes":
-                print(f"block fetched from MM to set: {hit_set} tag: {hit_tag}")
-        total_access += 1
-        print()
-    print("-------------------------")
-    # cache.print_cache()
-    # print("-------------------------")
-    hit_rate = total_hit / total_access
-    miss_rate = total_miss / total_access
-    with open("output.txt", "w") as output:
-        output.write("Cache Configuration -> \n\n")
-        output.write(f"Cache Size: {cache.capacity//1024} KB\n")
-        output.write(f"Block Size: {cache.block_size} B\n")
-        output.write(f"Associativity: {cache.associativity}-way\n")
-        output.write(f"Replacement: {cache.eviction_policy}\n")
-        output.write(f"Write Policy: {cache.write_policy}\n")
-        output.write(f"Write Allocate: {cache.write_allocate}\n")
-        output.write("\n-----------------------------\n")
-        output.write("Statistics -> \n\n")
-        output.write(f"Total Accesses: {total_access}\n")
-        output.write(f"Reads: {total_read}\n")
-        output.write(f"Writes: {total_write}\n\n")
-        output.write(f"Hits: {total_hit}\n")
-        output.write(f"Misses: {total_miss}\n")
-        output.write(f"Dirty Evictions: {cache.dirty_evictions}\n\n")
-        output.write(f"Compulsory Misses: {cache.misses_count["compulsory"]}\n")
-        output.write(f"Conflict Misses: {cache.misses_count["conflict"]}\n")
-        output.write(f"Capacity Misses: {cache.misses_count["capacity"]}\n\n")
-        output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
-        output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
-        output.write(f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n")
+
+
+if __name__ == "__main__":
+    main()
