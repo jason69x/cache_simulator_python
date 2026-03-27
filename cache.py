@@ -13,7 +13,7 @@ class MainMemory:
         self.blocks = {}
         self.TOTAL_ACCESS = 0
 
-    def read_mm(self, block_addr, block_size):
+    def read(self, block_addr, block_size):
         self.TOTAL_ACCESS += 1
         if block_addr in self.blocks:
             return self.blocks[block_addr]
@@ -21,25 +21,88 @@ class MainMemory:
         self.blocks[block_addr] = [random.randint(0, 100) for i in range(block_size)]
         return self.blocks[block_addr]
 
-    def write_mm(self, block_addr, block_no, block_size, dataword, flag):
+    def write_block(self, block_addr, data_block):
         self.TOTAL_ACCESS += 1
-        # flag == 1 is used to write a entire block to the memory
-        if flag == 1:
-            self.blocks[block_addr] = dataword
-            return
-        # else write only a word into a block (in case of write-around)
+        self.blocks[block_addr] = data_block
+
+    def write_word(self, block_addr, block_no, block_size, dataword):
+        self.TOTAL_ACCESS += 1
         if block_addr in self.blocks:
             self.blocks[block_addr][block_no] = dataword
             return
-        # self.blocks[block_addr] = [random.randint(0, 100) for i in range(block_size)]
-        # self.blocks[block_addr][block_no] = dataword
+        self.blocks[block_addr] = [random.randint(0, 100) for i in range(block_size)]
+        self.blocks[block_addr][block_no] = dataword
+
+
+class Bus:
+    def __init__(self, main_memory):
+        self.main_memory = main_memory
+        self.caches = []
+        self.bus_stats = {
+            "reads": 0,
+            "writes": 0,
+            "upgrades": 0,
+            "write_backs": 0,
+            "write_through": 0,
+            "cache_2_cache": 0,
+            "interventions": 0,
+            "invalidations": 0,
+        }
+
+    def attach_cache(self, cache):
+        self.caches.append(cache)
+
+    def RdX(self, id, set_no, tag_no, block_addr, block_size):
+        self.bus_stats["reads"] += 1
+        for cache in self.caches:
+            if cache.id == id:
+                continue
+            data = cache.snoop(set_no, tag_no, "read")
+            if data:
+                self.bus_stats["cache_2_cache"] += 1
+                self.bus_stats["interventions"] += 1
+                return data, "S"
+        data = self.main_memory.read(block_addr, block_size)
+        return data, "E"
+
+    def WrX(self, id, set_no, tag_no, block_addr, block_size):
+        self.bus_stats["writes"] += 1
+        for cache in self.caches:
+            if cache.id == id:
+                continue
+            data = cache.snoop(set_no, tag_no, "write")
+            if data:
+                self.bus_stats["invalidations"] += 1
+        if data:
+            self.bus_stats["cache_2_cache"] += 1
+            self.bus_stats["interventions"] += 1
+            return data, "M"
+
+        data = self.main_memory.read(block_addr, block_size)
+        return data, "M"
+
+    def WrX_u(self, id, set_no, tag_no):
+        self.bus_stats["upgrades"] += 1
+        for cache in self.caches:
+            if cache.id == id:
+                continue
+            data = cache.snoop(set_no, tag_no, "write_upgrade")
+            if data:
+                self.bus_stats["invalidations"] += 1
+
+    def Wb(self, block_addr, line_data):
+        self.main_memory.write_block(block_addr, line_data)
+        self.bus_stats["write_backs"] += 1
+
+    def Wt(self, block_addr, block_no, block_size, data_word):
+        self.main_memory.write_word(block_addr, block_no, block_size, data_word)
+        self.bus_stats["write_through"] += 1
 
 
 # cache line structure
 class CacheLine:
     def __init__(self, block_size):
-        self.valid = 0
-        self.dirty = 0
+        self.state = "I"
         self.tag = None
         self.data = [0] * block_size
 
@@ -60,7 +123,8 @@ class Cache:
 
     def __init__(
         self,
-        main_memory,
+        id,
+        bus,
         capacity,
         block_size,
         associativity,
@@ -71,11 +135,12 @@ class Cache:
         WORD_SIZE,
         BYTE_OFFSET,
     ):
+        self.id = id
         self.TOTAL_ACCESS = 0
         self.ADDRESS_SIZE = ADDRESS_SIZE
         self.WORD_SIZE = WORD_SIZE
         self.BYTE_OFFSET = BYTE_OFFSET
-        self.main_memory = main_memory
+        self.bus = bus
         self.write_policy = write_hit_policy
         self.write_allocate = write_miss_policy
         self.eviction_policy = eviction_policy
@@ -112,6 +177,71 @@ class Cache:
             "Random": self.Random_load,
             "PLRU": self.PLRU_load,
         }
+        self._search = {
+            "LRU": self.LRU_search,
+            "FIFO": self.FIFO_search,
+            "Random": self.Random_search,
+            "PLRU": self.PLRU_search,
+        }
+
+    def snoop(self, set_no, tag_no, type):
+        return self._search[self.eviction_policy](set_no, tag_no, type)
+
+    def LRU_search(self, set_no, tag_no, type):
+        if tag_no in self.cache[set_no].ways:
+            state = self.cache[set_no].ways[tag_no].state
+            if type == "read":
+                if line.state in ("M", "E", "O"):
+                    self.cache[set_no].ways[tag_no].state = "O"
+                    return self.cache[set_no].ways[tag_no].data
+
+            if type in ("write", "write_upgrade"):
+                self.cache[set_no].ways[tag_no].state = "I"
+                del self.cache[set_no].ways[tag_no]
+                return self.cache[set_no].ways[tag_no].data
+        return None
+
+    def PLRU_search(self, set_no, tag_no, type):
+        for line_no, line in enumerate(self.cache[set_no].plru_set):
+            if line != None and line.tag == tag_no:
+                if type == "read":
+                    if line.state in ("M", "E", "O"):
+                        line.state = "O"
+                        return line.data
+
+                if type in ("write", "write_upgrade"):
+                    line.state = "I"
+                    self.cache[set_no].plru_set[line_no] = None
+                    return line.data
+        return None
+
+    def Random_search(self, set_no, tag_no, type):
+        if tag_no in self.cache[set_no].ways:
+            state = self.cache[set_no].ways[tag_no].state
+            if type == "read":
+                if line.state in ("M", "E", "O"):
+                    self.cache[set_no].ways[tag_no].state = "O"
+                    return self.cache[set_no].ways[tag_no].data
+
+            if type in ("write", "write_upgrade"):
+                self.cache[set_no].ways[tag_no].state = "I"
+                del self.cache[set_no].ways[tag_no]
+                return self.cache[set_no].ways[tag_no].data
+        return None
+
+    def FIFO_search(self, set_no, tag_no, type):
+        for line in self.cache[set_no].fifo:
+            if line.tag == tag_no:
+                if type == "read":
+                    if line.state in ("M", "E", "O"):
+                        line.state = "O"
+                        return line.data
+
+                if type in ("write", "write_upgrade"):
+                    line.state = "I"
+                    self.cache[set_no].fifo.remove(line)
+                    return line.data
+        return None
 
     def read_cache(self, addr):
         self.TOTAL_ACCESS += 1
@@ -122,10 +252,12 @@ class Cache:
         if hit:
             return (hit, data, set_no, tag_no, None)
 
-        data = self.get_data_memory(
-            addr, set_no, tag_no, block_no, write_data=None, write=False
-        )
         self.misses_count[miss_type] += 1
+        block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
+        data, state = self.bus.RdX(self.id, set_no, tag_no, block_addr, self.block_size)
+        self._load[self.eviction_policy](
+            set_no, tag_no, block_no, data, state, write_data=None, write=False
+        )
         return (hit, data, set_no, tag_no, miss_type)
 
     def write_cache(self, addr, new_data):
@@ -139,25 +271,30 @@ class Cache:
         if hit:
             # if write-through policy is used, on cache hit write data to main memory too
             if self.write_policy == "write_through":
-                self.main_memory.write_mm(
-                    block_addr, block_no, self.block_size, new_data, 0
-                )
+                self.bus.Wt(block_addr, block_no, self.block_size, new_data)
             return hit, set_no, tag_no, None
-        # in case of write-allocate
         self.misses_count[miss_type] += 1
+        # in case of write-allocate
         if self.write_allocate == "yes":
-            self.get_data_memory(addr, set_no, tag_no, block_no, new_data, write=True)
+            data, state = self.bus.WrX(
+                self.id, set_no, tag_no, block_addr, self.block_size
+            )
+            self._load[self.eviction_policy](
+                set_no, tag_no, block_no, data, state, write_data=new_data, write=True
+            )
             return hit, set_no, tag_no, miss_type
         # in case of write-not-allocate directly write to main memory
-        self.main_memory.write_mm(block_addr, block_no, self.block_size, new_data, 0)
+        self.bus.Wt(block_addr, block_no, self.block_size, new_data)
         return hit, set_no, tag_no, miss_type
 
     def LRU_find(self, set_no, tag_no, block_no, write_data, write):
         if tag_no in self.cache[set_no].ways:
             self.cache[set_no].ways.move_to_end(tag_no, last=False)
             if write:
+                if self.cache[set_no].ways[tag_no].state in ("O", "S"):
+                    self.bus.WrX_u(self.id, set_no, tag_no)
+                self.cache[set_no].ways[tag_no].state = "M"
                 self.cache[set_no].ways[tag_no].data[block_no] = write_data
-                self.cache[set_no].ways[tag_no].dirty = 1
             return (True, self.cache[set_no].ways[tag_no].data[block_no])
         return (False, None)
 
@@ -165,8 +302,10 @@ class Cache:
         for line_no, line in enumerate(self.cache[set_no].plru_set):
             if line != None and line.tag == tag_no:
                 if write:
+                    if self.cache[set_no].plru_set[line_no].state in ("O", "S"):
+                        self.bus.WrX_u(self.id, set_no, tag_no)
+                    self.cache[set_no].plru_set[line_no].state = "M"
                     self.cache[set_no].plru_set[line_no].data[block_no] = write_data
-                    self.cache[set_no].plru_set[line_no].dirty = 1
                 # update plru_bits
                 line_no = line_no + self.associativity - 1
                 parent = (line_no - 1) // 2
@@ -183,8 +322,10 @@ class Cache:
     def Random_find(self, set_no, tag_no, block_no, write_data, write):
         if tag_no in self.cache[set_no].ways:
             if write:
+                if self.cache[set_no].ways[tag_no].state in ("O", "S"):
+                    self.bus.WrX_u(self.id, set_no, tag_no)
+                self.cache[set_no].ways[tag_no].state = "M"
                 self.cache[set_no].ways[tag_no].data[block_no] = write_data
-                self.cache[set_no].ways[tag_no].dirty = 1
             return (True, self.cache[set_no].ways[tag_no].data[block_no])
         return (False, None)
 
@@ -192,45 +333,30 @@ class Cache:
         for line in self.cache[set_no].fifo:
             if line.tag == tag_no:
                 if write:
+                    if line.state in ("O", "S"):
+                        self.bus.WrX_u(self.id, set_no, tag_no)
+                    line.state = "M"
                     line.data[block_no] = write_data
-                    line.dirty = 1
                 return (True, line.data[block_no])
         return (False, None)
 
-    def get_data_memory(self, addr, set_no, tag_no, block_no, write_data, write):
-
-        block_addr = addr >> (self.BYTE_OFFSET + self.block_offset)
-        # get a block of data from memory
-        data = self.main_memory.read_mm(block_addr, self.block_size)
-        # update this data as most recently used in eviction_policy
-        self._load[self.eviction_policy](
-            set_no, tag_no, block_no, data, write_data, write
-        )
-
-        return data[block_no]
-
-    # Load from Main Memory to LRU cache
-    def LRU_load(self, set_no, tag_no, block_no, data, write_data, write):
+    def LRU_load(self, set_no, tag_no, block_no, data, state, write_data, write):
         if len(self.cache[set_no].ways) == self.associativity:
             evicted_tag, evicted_line = self.cache[set_no].ways.popitem(last=True)
             # if cache line is dirty and write_back policy is used then write evicted data to memory
-            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+            if (
+                evicted_line.state == "M" or evicted_line.state == "O"
+            ) and self.write_policy == "write_back":
                 self.dirty_evictions += 1
                 block_addr = (evicted_tag << self.set_bits) | set_no
-                self.main_memory.write_mm(
-                    block_addr, block_no, self.block_size, evicted_line.data, 1
-                )
-        new_line = CacheLine(self.block_size)
-        new_line.valid = 1
-        new_line.tag = tag_no
-        new_line.data = data.copy()
+                self.bus.Wb(block_addr, evicted_line.data)
+        new_line = self.new_cacheline(state, tag_no, data.copy())
         if write:
             new_line.data[block_no] = write_data
         self.cache[set_no].ways[tag_no] = new_line
         self.cache[set_no].ways.move_to_end(tag_no, last=False)
 
-    # Load from Main Memory to PLRU cache
-    def PLRU_load(self, set_no, tag_no, block_no, data, write_data, write):
+    def PLRU_load(self, set_no, tag_no, block_no, data, state, write_data, write):
         load_at = None
         for line_no, line in enumerate(self.cache[set_no].plru_set):
             if line is None:
@@ -245,17 +371,14 @@ class Cache:
                     i = 2 * i + 1
             load_at = i - (self.associativity - 1)
             evicted_line = self.cache[set_no].plru_set[load_at]
-            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+            if (
+                evicted_line.state == "M" or evicted_line.state == "O"
+            ) and self.write_policy == "write_back":
                 self.dirty_evictions += 1
                 block_addr = (evicted_line.tag << self.set_bits) | set_no
-                self.main_memory.write_mm(
-                    block_addr, block_no, self.block_size, evicted_line.data, 1
-                )
+                self.bus.Wb(block_addr, evicted_line.data)
 
-        new_line = CacheLine(self.block_size)
-        new_line.valid = 1
-        new_line.tag = tag_no
-        new_line.data = data.copy()
+        new_line = self.new_cacheline(state, tag_no, data.copy())
         if write:
             new_line.data[block_no] = write_data
         self.cache[set_no].plru_set[load_at] = new_line
@@ -270,44 +393,45 @@ class Cache:
             parent = (parent - 1) // 2
 
     # Load from Main Memory to Random cache
-    def Random_load(self, set_no, tag_no, block_no, data, write_data, write):
+    def Random_load(self, set_no, tag_no, block_no, data, state, write_data, write):
         if len(self.cache[set_no].ways) == self.associativity:
             evicted_tag = random.choice(list(self.cache[set_no].ways))
             evicted_line = self.cache[set_no].ways.pop(evicted_tag)
             # if cache line is dirty and write_back policy is used then write evicted data to memory
-            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+            if (
+                evicted_line.state == "M" or evicted_line.state == "O"
+            ) and self.write_policy == "write_back":
                 self.dirty_evictions += 1
                 block_addr = (evicted_tag << self.set_bits) | set_no
-                self.main_memory.write_mm(
-                    block_addr, block_no, self.block_size, evicted_line.data, 1
-                )
-        new_line = CacheLine(self.block_size)
-        new_line.valid = 1
-        new_line.tag = tag_no
-        new_line.data = data.copy()
+                self.bus.Wb(block_addr, evicted_line.data)
+        new_line = self.new_cacheline(state, tag_no, data.copy())
         if write:
             new_line.data[block_no] = write_data
         self.cache[set_no].ways[tag_no] = new_line
 
     # Load from Main Memory to FIFO cache
-    def FIFO_load(self, set_no, tag_no, block_no, data, write_data, write):
+    def FIFO_load(self, set_no, tag_no, block_no, data, state, write_data, write):
         if len(self.cache[set_no].fifo) == self.associativity:
             evicted_line = self.cache[set_no].fifo.popleft()
             evicted_tag = evicted_line.tag
             # if cache line is dirty and write_back policy is used then write evicted data to memory
-            if evicted_line.dirty == 1 and self.write_policy == "write_back":
+            if (
+                evicted_line.state == "M" or evicted_line.state == "O"
+            ) and self.write_policy == "write_back":
                 self.dirty_evictions += 1
                 block_addr = (evicted_tag << self.set_bits) | set_no
-                self.main_memory.write_mm(
-                    block_addr, block_no, self.block_size, evicted_line.data, 1
-                )
-        new_line = CacheLine(self.block_size)
-        new_line.valid = 1
-        new_line.tag = tag_no
-        new_line.data = data.copy()
+                self.bus.Wb(block_addr, evicted_line.data)
+        new_line = self.new_cacheline(state, tag_no, data.copy())
         if write:
             new_line.data[block_no] = write_data
         self.cache[set_no].fifo.append(new_line)
+
+    def new_cacheline(self, state, tag_no, data):
+        new_line = CacheLine(self.block_size)
+        new_line.state = state
+        new_line.tag = tag_no
+        new_line.data = data
+        return new_line
 
     # decode the given address to find tag no, set no, block no
     def decode_addr(self, addr):
@@ -331,6 +455,22 @@ class Cache:
         self.fully.move_to_end(block_addr, last=False)
         return (set_no, tag_no, block_no, miss_type)
 
+    def print_cache(self):
+        if self.eviction_policy in ("LRU", "Random"):
+            for set_no, cset in enumerate(self.cache):
+                if len(cset.ways):
+                    print(f"set {set_no}:")
+                    print(cset.ways)
+        elif self.eviction_policy == "PLRU":
+            for set_no, cset in enumerate(self.cache):
+                for line in cset.plru_set:
+                    if line:
+                        print(f"set: {set_no} tag: {line.tag} -> {line.state}")
+        elif self.eviction_policy == "FIFO":
+            for set_no, cset in enumerate(self.cache):
+                for line in cset.fifo:
+                    print(f"set: {set_no} tag: {line.tag} -> {line.state}")
+
 
 def main():
 
@@ -345,6 +485,8 @@ def main():
     config.read(args.config)
 
     MAIN_MEMORY_ACCESS_TIME = config.getint("DRAM", "access_time")
+    total_cores = config.getint("CORE", "total_cores")
+    coherence_protocol = config.get("CORE", "coherence_protocol")
     capacity = int(config["CACHE_L1"]["capacity"])
     block_size = int(config["CACHE_L1"]["block_size"])
     associativity = int(config["CACHE_L1"]["associativity"])
@@ -358,18 +500,26 @@ def main():
     cache_miss_time = config.getint("CACHE_L1", "miss_time")
 
     main_memory = MainMemory()
-    cache = Cache(
-        main_memory,
-        capacity,
-        block_size,
-        associativity,
-        write_policy,
-        write_allocate,
-        eviction_policy,
-        address_size,
-        word_size,
-        byte_offset,
-    )
+    bus = Bus(main_memory)
+    cores = []
+
+    for i in range(total_cores):
+
+        cache = Cache(
+            i,
+            bus,
+            capacity,
+            block_size,
+            associativity,
+            write_policy,
+            write_allocate,
+            eviction_policy,
+            address_size,
+            word_size,
+            byte_offset,
+        )
+        bus.attach_cache(cache)
+        cores.append(cache)
 
     with open(args.trace, "r") as file:
         total_hit = 0
@@ -378,14 +528,15 @@ def main():
         total_read = 0
         total_write = 0
         for addr in file:
-            op, addr = addr.strip().split()
+            core_id, op, addr = addr.strip().split()
             addr = int(addr, 16)
+            core_id = int(core_id)
             if op == "R":
                 total_read += 1
-                hit, data, hit_set, hit_tag, miss_type = cache.read_cache(addr)
+                hit, data, hit_set, hit_tag, miss_type = cores[core_id].read_cache(addr)
             else:
                 total_write += 1
-                hit, hit_set, hit_tag, miss_type = cache.write_cache(
+                hit, hit_set, hit_tag, miss_type = cores[core_id].write_cache(
                     addr, random.randint(0, 100)
                 )
             if hit:
@@ -397,23 +548,21 @@ def main():
                 total_miss += 1
                 print("MISS", "addr: ", addr)
                 print("MISS TYPE:", miss_type)
-                if op == "W" and cache.write_allocate == "yes":
-                    print(f"block fetched from MM to set: {hit_set} tag: {hit_tag}")
             total_access += 1
             print()
         print("-------------------------")
-        # cache.print_cache()
-        # print("-------------------------")
         hit_rate = total_hit / total_access
         miss_rate = total_miss / total_access
         with open("output.txt", "w") as output:
             output.write("Cache Configuration -> \n\n")
+            output.write(f"Number of Cores: {total_cores}\n")
             output.write(f"Cache Size: {cache.capacity//1024} KB\n")
             output.write(f"Block Size: {cache.block_size} B\n")
             output.write(f"Associativity: {cache.associativity}-way\n")
             output.write(f"Replacement: {cache.eviction_policy}\n")
             output.write(f"Write Policy: {cache.write_policy}\n")
             output.write(f"Write Allocate: {cache.write_allocate}\n")
+            output.write(f"Coherence Protocol: {coherence_protocol}")
             output.write("\n-----------------------------\n")
             output.write("Statistics -> \n\n")
             output.write(f"Total Accesses: {total_access}\n")
@@ -430,6 +579,19 @@ def main():
             output.write(
                 f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n"
             )
+            output.write(f"Coherence Results:\n\n")
+            output.write(f"BusRdX: {bus.bus_stats["reads"]}\n")
+            output.write(f"BusWrX: {bus.bus_stats["writes"]}\n")
+            output.write(f"BusWrXu: {bus.bus_stats["upgrades"]}\n\n")
+            output.write(f"Invalidations: {bus.bus_stats["invalidations"]}\n")
+            output.write(f"Interventions: {bus.bus_stats["interventions"]}\n")
+            output.write(
+                f"Cache-to-Cache Transfers: {bus.bus_stats["cache_2_cache"]}\n"
+            )
+
+            for core_id, cache in enumerate(cores):
+                print(f"Core {core_id}:")
+                cache.print_cache()
 
 
 if __name__ == "__main__":
