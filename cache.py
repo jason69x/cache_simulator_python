@@ -67,17 +67,19 @@ class Bus:
 
     def WrX(self, id, set_no, tag_no, block_addr, block_size):
         self.bus_stats["writes"] += 1
-        data = None
+        found_data = None
         for cache in self.caches:
             if cache.id == id:
                 continue
             data = cache.snoop(set_no, tag_no, "write")
             if data:
                 self.bus_stats["invalidations"] += 1
-        if data:
+                if found_data is None:
+                    found_data = data
+        if found_data:
             self.bus_stats["cache_2_cache"] += 1
             self.bus_stats["interventions"] += 1
-            return data, "M"
+            return found_data, "M"
 
         data = self.main_memory.read(block_addr, block_size)
         return data, "M"
