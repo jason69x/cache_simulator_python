@@ -19,7 +19,7 @@ Hits: 1
 Misses: 3
 Dirty Evictions: 0
 
-Compulsory Misses: 1
+Compulsory Misses: 2
 Conflict Misses: 1
 Capacity Misses: 0
 

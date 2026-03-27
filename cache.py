@@ -67,6 +67,7 @@ class Bus:
 
     def WrX(self, id, set_no, tag_no, block_addr, block_size):
         self.bus_stats["writes"] += 1
+        data = None
         for cache in self.caches:
             if cache.id == id:
                 continue
@@ -191,14 +192,14 @@ class Cache:
         if tag_no in self.cache[set_no].ways:
             state = self.cache[set_no].ways[tag_no].state
             if type == "read":
-                if line.state in ("M", "E", "O"):
+                if state in ("M", "E", "O"):
                     self.cache[set_no].ways[tag_no].state = "O"
                     return self.cache[set_no].ways[tag_no].data
 
             if type in ("write", "write_upgrade"):
-                self.cache[set_no].ways[tag_no].state = "I"
+                data = self.cache[set_no].ways[tag_no].data
                 del self.cache[set_no].ways[tag_no]
-                return self.cache[set_no].ways[tag_no].data
+                return data
         return None
 
     def PLRU_search(self, set_no, tag_no, type):
@@ -210,9 +211,9 @@ class Cache:
                         return line.data
 
                 if type in ("write", "write_upgrade"):
-                    line.state = "I"
+                    data = line.data
                     self.cache[set_no].plru_set[line_no] = None
-                    return line.data
+                    return data
         return None
 
     def Random_search(self, set_no, tag_no, type):
@@ -224,9 +225,9 @@ class Cache:
                     return self.cache[set_no].ways[tag_no].data
 
             if type in ("write", "write_upgrade"):
-                self.cache[set_no].ways[tag_no].state = "I"
+                data = self.cache[set_no].ways[tag_no].data
                 del self.cache[set_no].ways[tag_no]
-                return self.cache[set_no].ways[tag_no].data
+                return data
         return None
 
     def FIFO_search(self, set_no, tag_no, type):
@@ -238,9 +239,9 @@ class Cache:
                         return line.data
 
                 if type in ("write", "write_upgrade"):
-                    line.state = "I"
+                    data = line.data
                     self.cache[set_no].fifo.remove(line)
-                    return line.data
+                    return data
         return None
 
     def read_cache(self, addr):
@@ -570,10 +571,14 @@ def main():
             output.write(f"Writes: {total_write}\n\n")
             output.write(f"Hits: {total_hit}\n")
             output.write(f"Misses: {total_miss}\n")
-            output.write(f"Dirty Evictions: {cache.dirty_evictions}\n\n")
-            output.write(f"Compulsory Misses: {cache.misses_count["compulsory"]}\n")
-            output.write(f"Conflict Misses: {cache.misses_count["conflict"]}\n")
-            output.write(f"Capacity Misses: {cache.misses_count["capacity"]}\n\n")
+            total_dirty = sum(c.dirty_evictions for c in cores)
+            output.write(f"Dirty Evictions: {total_dirty}\n\n")
+            total_misses = {}
+            for k in ("compulsory", "conflict", "capacity"):
+                total_misses[k] = sum(c.misses_count[k] for c in cores)
+            output.write(f"Compulsory Misses: {total_misses["compulsory"]}\n")
+            output.write(f"Conflict Misses: {total_misses["conflict"]}\n")
+            output.write(f"Capacity Misses: {total_misses["capacity"]}\n\n")
             output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
             output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
             output.write(
