@@ -220,7 +220,7 @@ class Cache:
         if tag_no in self.cache[set_no].ways:
             state = self.cache[set_no].ways[tag_no].state
             if type == "read":
-                if line.state in ("M", "E", "O"):
+                if state in ("M", "E", "O"):
                     self.cache[set_no].ways[tag_no].state = "O"
                     return self.cache[set_no].ways[tag_no].data
 
