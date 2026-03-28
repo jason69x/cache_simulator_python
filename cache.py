@@ -1,105 +1,5 @@
 import math
-import random
 from collections import OrderedDict, deque
-import configparser
-import argparse
-
-
-# main memory structure (Lazy structure only stores what is accessed)
-# stores blocks of data, block addressable
-class MainMemory:
-
-    def __init__(self):
-        self.blocks = {}
-        self.TOTAL_ACCESS = 0
-
-    def read(self, block_addr, block_size):
-        self.TOTAL_ACCESS += 1
-        if block_addr in self.blocks:
-            return self.blocks[block_addr]
-        # create a block with block_size number of random words
-        self.blocks[block_addr] = [random.randint(0, 100) for i in range(block_size)]
-        return self.blocks[block_addr]
-
-    def write_block(self, block_addr, data_block):
-        self.TOTAL_ACCESS += 1
-        self.blocks[block_addr] = data_block
-
-    def write_word(self, block_addr, block_no, block_size, dataword):
-        self.TOTAL_ACCESS += 1
-        if block_addr in self.blocks:
-            self.blocks[block_addr][block_no] = dataword
-            return
-        self.blocks[block_addr] = [random.randint(0, 100) for i in range(block_size)]
-        self.blocks[block_addr][block_no] = dataword
-
-
-class Bus:
-    def __init__(self, main_memory):
-        self.main_memory = main_memory
-        self.caches = []
-        self.bus_stats = {
-            "reads": 0,
-            "writes": 0,
-            "upgrades": 0,
-            "write_backs": 0,
-            "write_through": 0,
-            "cache_2_cache": 0,
-            "interventions": 0,
-            "invalidations": 0,
-        }
-
-    def attach_cache(self, cache):
-        self.caches.append(cache)
-
-    def RdX(self, id, set_no, tag_no, block_addr, block_size):
-        self.bus_stats["reads"] += 1
-        for cache in self.caches:
-            if cache.id == id:
-                continue
-            data = cache.snoop(set_no, tag_no, "read")
-            if data:
-                self.bus_stats["cache_2_cache"] += 1
-                self.bus_stats["interventions"] += 1
-                return data, "S"
-        data = self.main_memory.read(block_addr, block_size)
-        return data, "E"
-
-    def WrX(self, id, set_no, tag_no, block_addr, block_size):
-        self.bus_stats["writes"] += 1
-        found_data = None
-        for cache in self.caches:
-            if cache.id == id:
-                continue
-            data = cache.snoop(set_no, tag_no, "write")
-            if data:
-                self.bus_stats["invalidations"] += 1
-                if found_data is None:
-                    found_data = data
-        if found_data:
-            self.bus_stats["cache_2_cache"] += 1
-            self.bus_stats["interventions"] += 1
-            return found_data, "M"
-
-        data = self.main_memory.read(block_addr, block_size)
-        return data, "M"
-
-    def WrX_u(self, id, set_no, tag_no):
-        self.bus_stats["upgrades"] += 1
-        for cache in self.caches:
-            if cache.id == id:
-                continue
-            data = cache.snoop(set_no, tag_no, "write_upgrade")
-            if data:
-                self.bus_stats["invalidations"] += 1
-
-    def Wb(self, block_addr, line_data):
-        self.main_memory.write_block(block_addr, line_data)
-        self.bus_stats["write_backs"] += 1
-
-    def Wt(self, block_addr, block_no, block_size, data_word):
-        self.main_memory.write_word(block_addr, block_no, block_size, data_word)
-        self.bus_stats["write_through"] += 1
 
 
 # cache line structure
@@ -108,6 +8,9 @@ class CacheLine:
         self.state = "I"
         self.tag = None
         self.data = [0] * block_size
+
+    def __str__(self):
+        return f"[Tag={self.tag} | State={self.state}]"
 
 
 # cache set structure
@@ -458,148 +361,25 @@ class Cache:
         self.fully.move_to_end(block_addr, last=False)
         return (set_no, tag_no, block_no, miss_type)
 
-    def print_cache(self):
+    def __str__(self):
+        output = []
         if self.eviction_policy in ("LRU", "Random"):
             for set_no, cset in enumerate(self.cache):
+                temp = []
                 if len(cset.ways):
-                    print(f"set {set_no}:")
-                    print(cset.ways)
+                    temp.append(f"set {set_no}:")
+                    for _, line in cset.ways.items():
+                        if line.state != "I":
+                            temp.append(str(line))
+                if temp:
+                    output.append("\n".join(temp))
         elif self.eviction_policy == "PLRU":
             for set_no, cset in enumerate(self.cache):
                 for line in cset.plru_set:
                     if line:
-                        print(f"set: {set_no} tag: {line.tag} -> {line.state}")
+                        output.append(f"set: {set_no} tag: {line.tag} -> {line.state}")
         elif self.eviction_policy == "FIFO":
             for set_no, cset in enumerate(self.cache):
                 for line in cset.fifo:
-                    print(f"set: {set_no} tag: {line.tag} -> {line.state}")
-
-
-def main():
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, required=True, help="Path to config file")
-    parser.add_argument("--trace", type=str, required=True, help="Path to Trace file")
-    # parser.add_argument("--levels", type=int, help="no. of cache levels")
-    args = parser.parse_args()
-
-    # load config
-    config = configparser.ConfigParser()
-    config.read(args.config)
-
-    MAIN_MEMORY_ACCESS_TIME = config.getint("DRAM", "access_time")
-    total_cores = config.getint("CORE", "total_cores")
-    coherence_protocol = config.get("CORE", "coherence_protocol")
-    capacity = int(config["CACHE_L1"]["capacity"])
-    block_size = int(config["CACHE_L1"]["block_size"])
-    associativity = int(config["CACHE_L1"]["associativity"])
-    write_policy = config["CACHE_L1"]["write_policy"]
-    write_allocate = config["CACHE_L1"]["write_allocate"]
-    eviction_policy = config["CACHE_L1"]["eviction_policy"]
-    address_size = int(config["DRAM"]["address_size"])
-    word_size = config.getint("DRAM", "word_size")
-    byte_offset = config.getint("CACHE_L1", "byte_offset")
-    cache_hit_time = config.getint("CACHE_L1", "hit_time")
-    cache_miss_time = config.getint("CACHE_L1", "miss_time")
-
-    main_memory = MainMemory()
-    bus = Bus(main_memory)
-    cores = []
-
-    for i in range(total_cores):
-
-        cache = Cache(
-            i,
-            bus,
-            capacity,
-            block_size,
-            associativity,
-            write_policy,
-            write_allocate,
-            eviction_policy,
-            address_size,
-            word_size,
-            byte_offset,
-        )
-        bus.attach_cache(cache)
-        cores.append(cache)
-
-    with open(args.trace, "r") as file:
-        total_hit = 0
-        total_miss = 0
-        total_access = 0
-        total_read = 0
-        total_write = 0
-        for addr in file:
-            core_id, op, addr = addr.strip().split()
-            addr = int(addr, 16)
-            core_id = int(core_id)
-            if op == "R":
-                total_read += 1
-                hit, data, hit_set, hit_tag, miss_type = cores[core_id].read_cache(addr)
-            else:
-                total_write += 1
-                hit, hit_set, hit_tag, miss_type = cores[core_id].write_cache(
-                    addr, random.randint(0, 100)
-                )
-            if hit:
-                total_hit += 1
-                print("HIT ", "addr: ", addr)
-                print("set: ", hit_set)
-                print("tag: ", hit_tag)
-            else:
-                total_miss += 1
-                print("MISS", "addr: ", addr)
-                print("MISS TYPE:", miss_type)
-            total_access += 1
-            print()
-        print("-------------------------")
-        hit_rate = total_hit / total_access
-        miss_rate = total_miss / total_access
-        with open("output.txt", "w") as output:
-            output.write("Cache Configuration -> \n\n")
-            output.write(f"Number of Cores: {total_cores}\n")
-            output.write(f"Cache Size: {cache.capacity//1024} KB\n")
-            output.write(f"Block Size: {cache.block_size} B\n")
-            output.write(f"Associativity: {cache.associativity}-way\n")
-            output.write(f"Replacement: {cache.eviction_policy}\n")
-            output.write(f"Write Policy: {cache.write_policy}\n")
-            output.write(f"Write Allocate: {cache.write_allocate}\n")
-            output.write(f"Coherence Protocol: {coherence_protocol}")
-            output.write("\n-----------------------------\n")
-            output.write("Statistics -> \n\n")
-            output.write(f"Total Accesses: {total_access}\n")
-            output.write(f"Reads: {total_read}\n")
-            output.write(f"Writes: {total_write}\n\n")
-            output.write(f"Hits: {total_hit}\n")
-            output.write(f"Misses: {total_miss}\n")
-            total_dirty = sum(c.dirty_evictions for c in cores)
-            output.write(f"Dirty Evictions: {total_dirty}\n\n")
-            total_misses = {}
-            for k in ("compulsory", "conflict", "capacity"):
-                total_misses[k] = sum(c.misses_count[k] for c in cores)
-            output.write(f"Compulsory Misses: {total_misses["compulsory"]}\n")
-            output.write(f"Conflict Misses: {total_misses["conflict"]}\n")
-            output.write(f"Capacity Misses: {total_misses["capacity"]}\n\n")
-            output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
-            output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
-            output.write(
-                f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n"
-            )
-            output.write(f"Coherence Results:\n\n")
-            output.write(f"BusRdX: {bus.bus_stats["reads"]}\n")
-            output.write(f"BusWrX: {bus.bus_stats["writes"]}\n")
-            output.write(f"BusWrXu: {bus.bus_stats["upgrades"]}\n\n")
-            output.write(f"Invalidations: {bus.bus_stats["invalidations"]}\n")
-            output.write(f"Interventions: {bus.bus_stats["interventions"]}\n")
-            output.write(
-                f"Cache-to-Cache Transfers: {bus.bus_stats["cache_2_cache"]}\n"
-            )
-
-            for core_id, cache in enumerate(cores):
-                print(f"Core {core_id}:")
-                cache.print_cache()
-
-
-if __name__ == "__main__":
-    main()
+                    output.append(f"set: {set_no} tag: {line.tag} -> {line.state}")
+        return "\n".join(output)

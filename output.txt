@@ -4,7 +4,7 @@ Number of Cores: 2
 Cache Size: 32 KB
 Block Size: 64 B
 Associativity: 4-way
-Replacement: PLRU
+Replacement: LRU
 Write Policy: write_back
 Write Allocate: yes
 Coherence Protocol: MOESI
@@ -36,3 +36,14 @@ BusWrXu: 1
 Invalidations: 1
 Interventions: 2
 Cache-to-Cache Transfers: 2
+
+--- Core 0 --- 
+
+set 0:
+[Tag=0 | State=O]
+
+--- Core 1 --- 
+
+set 0:
+[Tag=0 | State=S]
+
