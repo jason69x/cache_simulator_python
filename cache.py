@@ -4,10 +4,10 @@ from collections import OrderedDict, deque
 
 # cache line structure
 class CacheLine:
-    def __init__(self, block_size):
+    def __init__(self, block_size, WORD_SIZE):
         self.state = "I"
         self.tag = None
-        self.data = [0] * block_size
+        self.data = [0] * (block_size // (WORD_SIZE // 8))
 
     def __str__(self):
         return f"[Tag={self.tag} | State={self.state}]"
@@ -333,7 +333,7 @@ class Cache:
         self.cache[set_no].fifo.append(new_line)
 
     def new_cacheline(self, state, tag_no, data):
-        new_line = CacheLine(self.block_size)
+        new_line = CacheLine(self.block_size, self.WORD_SIZE)
         new_line.state = state
         new_line.tag = tag_no
         new_line.data = data

@@ -1,0 +1,290 @@
+================================================================================
+CACHE CONFIGURATION
+================================================================================
+Capacity      : 32768 bytes
+Block size    : 64 bytes
+Associativity : 4-way
+Sets          : 32768 / (64 × 4) = 128 sets
+Eviction      : LRU
+Address bits  : [31:13] tag (19b) | [12:6] index (7b) | [5:0] offset (6b)
+
+Address decoding helper (hex → index = bits[12:6]):
+  0x00000000 → index=0,   tag=0x00000
+  0x00000040 → index=1,   tag=0x00000
+  0x00000080 → index=2,   tag=0x00000
+  0x000000C0 → index=3,   tag=0x00000
+  0x00000100 → index=4,   tag=0x00000
+  0x00000140 → index=5,   tag=0x00000
+  0x00000200 → index=8,   tag=0x00000
+  0x00000240 → index=9,   tag=0x00000
+  0x00002000 → index=0,   tag=0x00001   ← same index as 0x00000000, diff tag
+  0x00002040 → index=1,   tag=0x00001
+  0x00002200 → index=8,   tag=0x00001
+  0x00004000 → index=0,   tag=0x00002
+  0x00004040 → index=1,   tag=0x00002
+  0x00004200 → index=8,   tag=0x00002
+  0x00006000 → index=0,   tag=0x00003
+  0x00006040 → index=1,   tag=0x00003
+  0x00006200 → index=8,   tag=0x00003
+  0x00008000 → index=0,   tag=0x00004
+  0x00008040 → index=1,   tag=0x00004
+  0x0000A000 → index=0,   tag=0x00005
+
+================================================================================
+TRACE 1: WRITE-BACK + WRITE-ALLOCATE  (trace_wb_wa.txt)
+================================================================================
+Key behaviour:
+  - Read miss  → fetch block into cache (allocate)
+  - Write miss → fetch block into cache (allocate), mark dirty
+  - Write hit  → update cache only, mark dirty (do NOT write to memory yet)
+  - Dirty eviction → write dirty block to memory first
+
+Legend: HIT=cache hit  MISS=cache miss  MEM_R=memory read  MEM_W=memory write
+        D=dirty  C=clean  [set X way Y]
+
+#   Access           Tag  Set  Action        Cache state after (dirty blocks marked *)
+--- ---------------- ---- ---- ------------- -----------------------------------------------
+1   R 0x00000000     0    0    MISS+MEM_R    set0:[tag0 C]
+2   R 0x00000040     0    1    MISS+MEM_R    set1:[tag0 C]
+3   R 0x00000080     0    2    MISS+MEM_R    set2:[tag0 C]
+4   R 0x000000C0     0    3    MISS+MEM_R    set3:[tag0 C]
+5   W 0x00000000     0    0    HIT           set0:[tag0 D*]   (no mem write)
+6   W 0x00000040     0    1    HIT           set1:[tag0 D*]
+7   R 0x00000100     0    4    MISS+MEM_R    set4:[tag0 C]
+8   R 0x00000140     0    5    MISS+MEM_R    set5:[tag0 C]
+9   W 0x00000080     0    2    HIT           set2:[tag0 D*]
+10  R 0x00000000     0    0    HIT           set0:[tag0 D*]
+11  W 0x00002000     1    0    MISS+MEM_R    set0:[tag0 D*, tag1 D*]   (allocate, mark dirty)
+12  R 0x00002040     1    1    MISS+MEM_R    set1:[tag0 D*, tag1 C]
+13  W 0x00004000     2    0    MISS+MEM_R    set0:[tag0 D*, tag1 D*, tag2 D*]
+14  R 0x00004040     2    1    MISS+MEM_R    set1:[tag0 D*, tag1 C, tag2 C]
+15  W 0x00006000     3    0    MISS+MEM_R    set0:[tag0 D*, tag1 D*, tag2 D*, tag3 D*]
+16  R 0x00006040     3    1    MISS+MEM_R    set1:[tag0 D*, tag1 C, tag2 C, tag3 C]
+17  W 0x00008000     4    0    MISS+MEM_R    set0 FULL(4 ways). LRU=tag0(dirty)→MEM_W
+                                             Evict tag0→MEM_W, bring tag4→D*
+                                             set0:[tag1 D*, tag2 D*, tag3 D*, tag4 D*]
+18  W 0x00008040     4    1    MISS+MEM_R    set1:[tag0 D*, tag1 C, tag2 C, tag3 C, tag4 D*]
+                                             Wait—set1 has 4 ways used, LRU=tag0(D*)→MEM_W
+                                             Evict tag0→MEM_W, bring tag4→D*
+                                             set1:[tag1 C, tag2 C, tag3 C, tag4 D*]
+19  R 0x00000000     0    0    MISS+MEM_R    set0 has [tag1,tag2,tag3,tag4], LRU=tag1(D*)→MEM_W
+                                             Evict tag1→MEM_W, bring tag0 C
+                                             set0:[tag2 D*, tag3 D*, tag4 D*, tag0 C]
+20  W 0x0000A000     5    0    MISS+MEM_R    LRU=tag2(D*)→MEM_W
+                                             Evict tag2→MEM_W, bring tag5→D*
+                                             set0:[tag3 D*, tag4 D*, tag0 C, tag5 D*]
+21  R 0x0000A000     5    0    HIT           set0:[tag3 D*, tag4 D*, tag0 C, tag5 D*]
+22  W 0x00000000     0    0    HIT           set0:[tag3 D*, tag4 D*, tag5 D*, tag0 D*]
+23  R 0x00000040     0    1    MISS+MEM_R    set1 has [tag1,tag2,tag3,tag4]. LRU=tag1(C)
+                                             Evict tag1(clean, no MEM_W), bring tag0 C
+                                             set1:[tag2 C, tag3 C, tag4 D*, tag0 C]
+24  W 0x00002000     1    0    MISS+MEM_R    set0 has [tag3,tag4,tag5,tag0]. LRU=tag3(D*)→MEM_W
+                                             Evict tag3→MEM_W, bring tag1→D*
+                                             set0:[tag4 D*, tag5 D*, tag0 D*, tag1 D*]
+25  R 0x00008040     4    1    MISS+MEM_R    set1 has [tag2,tag3,tag4,tag0]. LRU=tag2(C)
+                                             Evict tag2(clean), bring tag4 C
+                                             set1:[tag3 C, tag4 D*(was evicted earlier, now re-fetched clean), tag0 C, tag4 C]
+                                             Note: re-fetch from memory (dirty was already written back at step 18)
+                                             set1:[tag3 C, tag0 C, tag4 C]  (tag4 replaces tag2 LRU slot)
+
+SUMMARY — WRITE-BACK + WRITE-ALLOCATE:
+  Total accesses : 25
+  Read accesses  : 14
+  Write accesses : 11
+  Read hits      : 3   (#10, #21 implicit read for #22 already in, #21)
+  Read misses    : 11
+  Write hits     : 4   (#5, #6, #9, #21-check-#22)
+  Write misses   : 7
+  Memory reads   : 19  (one per miss = allocate)
+  Memory writes  : 6   (dirty evictions: steps 17,18,19,20,24 + step18 set1 evict)
+
+  Precise counts:
+    Hits  (R+W)  : #5,#6,#9,#10,#21,#22 = 6 hits
+    Misses(R+W)  : 19 misses
+    Mem reads    : 19  (every miss triggers a block fetch)
+    Mem writes   : 6   (dirty evictions only — not on every write hit)
+
+================================================================================
+TRACE 2: WRITE-BACK + NO-WRITE-ALLOCATE  (trace_wb_nwa.txt)
+================================================================================
+Key behaviour:
+  - Read miss  → fetch block into cache (allocate)
+  - Write miss → write directly to memory, do NOT fetch into cache
+  - Write hit  → update cache only, mark dirty
+  - Dirty eviction → write dirty block to memory first
+
+#   Access           Tag  Set  Action              Notes
+--- ---------------- ---- ---- ------------------- -----------------------------------------------
+1   R 0x00000000     0    0    MISS+MEM_R          set0:[tag0 C]
+2   R 0x00000040     0    1    MISS+MEM_R          set1:[tag0 C]
+3   R 0x00000080     0    2    MISS+MEM_R          set2:[tag0 C]
+4   W 0x00000200     0    8    MISS→MEM_W only     NO cache alloc; write goes straight to memory
+5   W 0x00000240     0    9    MISS→MEM_W only     NO cache alloc
+6   R 0x00000000     0    0    HIT                 set0:[tag0 C]
+7   R 0x00000040     0    1    HIT                 set1:[tag0 C]
+8   W 0x00000200     0    8    MISS→MEM_W only     still not in cache
+9   R 0x00000080     0    2    HIT                 set2:[tag0 C]
+10  W 0x00002200     1    8    MISS→MEM_W only     set8 empty, no alloc
+11  R 0x00002000     1    0    MISS+MEM_R          set0:[tag0 C, tag1 C]
+12  W 0x00002200     1    8    MISS→MEM_W only     still not in cache
+13  R 0x00000000     0    0    HIT                 set0:[tag0 C, tag1 C]  (LRU update: tag0 MRU)
+14  W 0x00000200     0    8    MISS→MEM_W only
+15  R 0x00000040     0    1    HIT                 set1:[tag0 C]
+16  W 0x00004200     2    8    MISS→MEM_W only
+17  R 0x00004000     2    0    MISS+MEM_R          set0:[tag0 C, tag1 C, tag2 C]
+18  W 0x00004200     2    8    MISS→MEM_W only
+19  R 0x00000080     0    2    HIT                 set2:[tag0 C]
+20  W 0x00006200     3    8    MISS→MEM_W only
+21  R 0x00006000     3    0    MISS+MEM_R          set0:[tag0 C, tag1 C, tag2 C, tag3 C]
+22  R 0x00000000     0    0    HIT                 set0 hit tag0 (LRU→tag1)
+23  W 0x00000200     0    8    MISS→MEM_W only
+24  R 0x00000040     0    1    HIT                 set1:[tag0 C]
+25  W 0x00002200     1    8    MISS→MEM_W only
+
+SUMMARY — WRITE-BACK + NO-WRITE-ALLOCATE:
+  Total accesses : 25
+  Read accesses  : 13
+  Write accesses : 12
+  Read hits      : 7   (#6,#7,#9,#13,#15,#19,#22,#24) = 8 hits
+  Read misses    : 5   (#1,#2,#3,#11,#17,#21) = 6 misses (with alloc)
+  Write hits     : 0   (no writes to cached addresses in this trace)
+  Write misses   : 12  → all 12 writes go straight to memory, NO alloc
+  Memory reads   : 6   (only on read misses)
+  Memory writes  : 12  (one per write miss, no dirty evictions needed)
+
+  Precise counts:
+    Hits  (R+W)  : #6,#7,#9,#13,#15,#19,#22,#24 = 8
+    Misses(R+W)  : 17 (6 read miss + 12 write miss counting as memory ops)
+    Mem reads    : 6
+    Mem writes   : 12  (all write misses go to memory directly)
+
+================================================================================
+TRACE 3: WRITE-THROUGH + WRITE-ALLOCATE  (trace_wt_wa.txt)
+================================================================================
+Key behaviour:
+  - Read miss  → fetch block into cache (allocate)
+  - Write miss → fetch block into cache (allocate), ALSO write to memory immediately
+  - Write hit  → update cache AND write to memory immediately (every write → MEM_W)
+  - No dirty bits; evictions are ALWAYS clean → no extra MEM_W on eviction
+
+#   Access           Tag  Set  Action              Notes
+--- ---------------- ---- ---- ------------------- -----------------------------------------------
+1   R 0x00000000     0    0    MISS+MEM_R          set0:[tag0]
+2   R 0x00000040     0    1    MISS+MEM_R          set1:[tag0]
+3   R 0x00000080     0    2    MISS+MEM_R          set2:[tag0]
+4   W 0x00000000     0    0    HIT+MEM_W           cache hit; also write to memory
+5   W 0x00000040     0    1    HIT+MEM_W           cache hit; also write to memory
+6   R 0x00000000     0    0    HIT                 set0:[tag0]  (no mem access)
+7   W 0x00000080     0    2    HIT+MEM_W           cache hit; also write to memory
+8   R 0x00000100     0    4    MISS+MEM_R          set4:[tag0]
+9   W 0x00000100     0    4    HIT+MEM_W           cache hit; also write to memory
+10  R 0x00002000     1    0    MISS+MEM_R          set0:[tag0, tag1]
+11  W 0x00002000     1    0    HIT+MEM_W           cache hit; also write to memory
+12  R 0x00002040     1    1    MISS+MEM_R          set1:[tag0, tag1]
+13  W 0x00002040     1    1    HIT+MEM_W           cache hit; also write to memory
+14  R 0x00004000     2    0    MISS+MEM_R          set0:[tag0, tag1, tag2]
+15  W 0x00004000     2    0    HIT+MEM_W           cache hit; also write to memory
+16  R 0x00004040     2    1    MISS+MEM_R          set1:[tag0, tag1, tag2]
+17  W 0x00004040     2    1    HIT+MEM_W           cache hit; also write to memory
+18  R 0x00000000     0    0    HIT                 set0:[tag0,tag1,tag2] hit tag0
+19  W 0x00000000     0    0    HIT+MEM_W           cache hit; also write to memory
+20  R 0x00000040     0    1    HIT                 set1:[tag0,tag1,tag2] hit tag0
+21  W 0x00002000     1    0    HIT+MEM_W           cache hit; also write to memory
+22  R 0x00000080     0    2    HIT                 set2:[tag0]
+23  W 0x00004000     2    0    HIT+MEM_W           cache hit; also write to memory
+24  R 0x00000100     0    4    HIT                 set4:[tag0]
+25  W 0x00000100     0    4    HIT+MEM_W           cache hit; also write to memory
+
+SUMMARY — WRITE-THROUGH + WRITE-ALLOCATE:
+  Total accesses : 25
+  Read accesses  : 13
+  Write accesses : 12
+  Read hits      : 7   (#6,#18,#20,#22,#24 + #4 is write hit... reads: #6,#18,#20,#22,#24)
+  Read misses    : 8   (#1,#2,#3,#8,#10,#12,#14,#16)
+  Write hits     : 12  (#4,#5,#7,#9,#11,#13,#15,#17,#19,#21,#23,#25)
+  Write misses   : 0   (in this trace all writes come after a read of same address)
+  Memory reads   : 8   (one per read miss)
+  Memory writes  : 12  (every write, hit or miss, goes to memory)
+
+  Precise counts:
+    Hits  (R+W)  : 5 read hits + 12 write hits = 17
+    Misses(R+W)  : 8 read misses + 0 write misses = 8
+    Mem reads    : 8
+    Mem writes   : 12  (all writes go to memory regardless of hit/miss)
+
+================================================================================
+TRACE 4: WRITE-THROUGH + NO-WRITE-ALLOCATE  (trace_wt_nwa.txt)
+================================================================================
+Key behaviour:
+  - Read miss  → fetch block into cache (allocate)
+  - Write miss → write directly to memory ONLY, no cache allocation
+  - Write hit  → update cache AND write to memory immediately
+  - No dirty bits; evictions always clean
+
+#   Access           Tag  Set  Action              Notes
+--- ---------------- ---- ---- ------------------- -----------------------------------------------
+1   R 0x00000000     0    0    MISS+MEM_R          set0:[tag0]
+2   R 0x00000040     0    1    MISS+MEM_R          set1:[tag0]
+3   R 0x00000080     0    2    MISS+MEM_R          set2:[tag0]
+4   W 0x00000200     0    8    MISS→MEM_W only     not in cache, write to mem, no alloc
+5   W 0x00000240     0    9    MISS→MEM_W only     not in cache, write to mem, no alloc
+6   R 0x00000000     0    0    HIT                 set0:[tag0]
+7   W 0x00000200     0    8    MISS→MEM_W only     still not in cache
+8   R 0x00000040     0    1    HIT                 set1:[tag0]
+9   W 0x00002200     1    8    MISS→MEM_W only     not in cache
+10  R 0x00002000     1    0    MISS+MEM_R          set0:[tag0, tag1]
+11  W 0x00002200     1    8    MISS→MEM_W only     still not in cache
+12  R 0x00000000     0    0    HIT                 set0 hit tag0
+13  W 0x00000200     0    8    MISS→MEM_W only
+14  R 0x00000040     0    1    HIT                 set1 hit tag0
+15  W 0x00004200     2    8    MISS→MEM_W only
+16  R 0x00004000     2    0    MISS+MEM_R          set0:[tag0, tag1, tag2]
+17  W 0x00004200     2    8    MISS→MEM_W only
+18  R 0x00000080     0    2    HIT                 set2:[tag0]
+19  W 0x00006200     3    8    MISS→MEM_W only
+20  R 0x00006000     3    0    MISS+MEM_R          set0:[tag0, tag1, tag2, tag3]
+21  W 0x00006200     3    8    MISS→MEM_W only
+22  R 0x00000000     0    0    HIT                 set0 hit tag0
+23  W 0x00000200     0    8    MISS→MEM_W only
+24  R 0x00000040     0    1    HIT                 set1 hit tag0
+25  W 0x00000000     0    0    HIT+MEM_W           tag0 IS in cache → hit, write to cache+mem
+
+SUMMARY — WRITE-THROUGH + NO-WRITE-ALLOCATE:
+  Total accesses : 25
+  Read accesses  : 13
+  Write accesses : 12
+  Read hits      : 7   (#6,#8,#12,#14,#18,#22,#24)
+  Read misses    : 6   (#1,#2,#3,#10,#16,#20)
+  Write hits     : 1   (#25)
+  Write misses   : 11  (#4,#5,#7,#9,#11,#13,#15,#17,#19,#21,#23)
+  Memory reads   : 6   (one per read miss)
+  Memory writes  : 12  (11 write misses go straight to mem + 1 write hit also goes to mem)
+
+  Precise counts:
+    Hits  (R+W)  : 7 + 1 = 8
+    Misses(R+W)  : 6 + 11 = 17
+    Mem reads    : 6
+    Mem writes   : 12
+
+================================================================================
+COMBINED COMPARISON TABLE
+================================================================================
+
+Policy Combo          | Total | R-hits | W-hits | Hits | Misses | Mem-R | Mem-W
+----------------------+-------+--------+--------+------+--------+-------+------
+WB  + Write-Alloc     |  25   |   2    |   4    |  6   |  19    |  19   |  6*
+WB  + No-Write-Alloc  |  25   |   8    |   0    |  8   |  17    |   6   |  12
+WT  + Write-Alloc     |  25   |   5    |  12    |  17  |   8    |   8   |  12
+WT  + No-Write-Alloc  |  25   |   7    |   1    |  8   |  17    |   6   |  12
+
+* WB+WA Mem-W = 6 dirty evictions (not per-write, only when dirty blocks evicted)
+
+KEY BEHAVIOURAL DIFFERENCES:
+  - WT always writes to memory on every write → higher Mem-W vs WB (unless many evictions)
+  - WB+WA: lowest Mem-W since writes only go to mem on dirty eviction
+  - No-Write-Alloc: write misses bypass cache → fewer cache allocations for write-heavy workloads
+  - Write-Alloc: every miss (read or write) allocates a cache line → higher hit rate for later accesses
+  - WB dirty eviction: MUST write evicted dirty block to memory before replacing it
+  - WT eviction: always clean → no extra memory write on eviction
+
+================================================================================

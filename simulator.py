@@ -75,13 +75,10 @@ def main():
                 )
             if hit:
                 total_hit += 1
-                print("HIT ", "addr: ", addr)
-                print("set: ", hit_set)
-                print("tag: ", hit_tag)
+                print("HIT ", "addr: ", addr, " set: ", hit_set, " tag: ", hit_tag)
             else:
                 total_miss += 1
-                print("MISS", "addr: ", addr)
-                print("MISS TYPE:", miss_type)
+                print("MISS", "addr: ", addr, " type:", miss_type)
             total_access += 1
             print()
         print("-------------------------")

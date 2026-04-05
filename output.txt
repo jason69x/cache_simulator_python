@@ -11,39 +11,48 @@ Coherence Protocol: MOESI
 -----------------------------
 Statistics -> 
 
-Total Accesses: 4
-Reads: 3
-Writes: 1
+Total Accesses: 23
+Reads: 15
+Writes: 8
 
-Hits: 1
-Misses: 3
+Hits: 6
+Misses: 17
 Dirty Evictions: 0
 
-Compulsory Misses: 2
-Conflict Misses: 1
+Compulsory Misses: 11
+Conflict Misses: 6
 Capacity Misses: 0
 
-Hit Rate: 25.00%
-Miss Rate: 75.00%
+Hit Rate: 26.09%
+Miss Rate: 73.91%
 
-AMAT: 17.00 ns
+AMAT: 16.78 ns
 Coherence Results:
 
-BusRdX: 3
-BusWrX: 0
-BusWrXu: 1
+BusRdX: 15
+BusWrX: 2
+BusWrXu: 6
 
-Invalidations: 1
-Interventions: 2
-Cache-to-Cache Transfers: 2
+Invalidations: 8
+Interventions: 11
+Cache-to-Cache Transfers: 11
 
 --- Core 0 --- 
 
-set 0:
-[Tag=0 | State=O]
+set 1:
+[Tag=1 | State=O]
+[Tag=0 | State=S]
+set 65:
+[Tag=2 | State=S]
+[Tag=1 | State=M]
+[Tag=0 | State=E]
 
 --- Core 1 --- 
 
-set 0:
-[Tag=0 | State=S]
+set 1:
+[Tag=2 | State=M]
+[Tag=1 | State=S]
+[Tag=0 | State=O]
+set 65:
+[Tag=2 | State=O]
 
