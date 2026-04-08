@@ -32,6 +32,7 @@ def main():
     byte_offset = config.getint("CACHE_L1", "byte_offset")
     cache_hit_time = config.getint("CACHE_L1", "hit_time")
     cache_miss_time = config.getint("CACHE_L1", "miss_time")
+    cache_2_cache_time = config.getint("CORE", "cache_2_cache_time")
 
     main_memory = MainMemory()
     bus = Bus(main_memory)
@@ -97,6 +98,7 @@ def main():
             output.write("\n-----------------------------\n")
             output.write("Statistics -> \n\n")
             output.write(f"Total Accesses: {total_access}\n")
+            output.write(f"Total Memory Accesses: {main_memory.TOTAL_ACCESS}\n")
             output.write(f"Reads: {total_read}\n")
             output.write(f"Writes: {total_write}\n\n")
             output.write(f"Hits: {total_hit}\n")
@@ -111,9 +113,14 @@ def main():
             output.write(f"Capacity Misses: {total_misses["capacity"]}\n\n")
             output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
             output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
-            output.write(
-                f"AMAT: {cache_hit_time + miss_rate * cache_miss_time:.2f} ns\n"
-            )
+            total_transfers = main_memory.TOTAL_ACCESS + bus.bus_stats["cache_2_cache"]
+            miss_penalty = (
+                (main_memory.TOTAL_ACCESS // total_transfers) * MAIN_MEMORY_ACCESS_TIME
+                + (bus.bus_stats["cache_2_cache"] // total_transfers)
+                * cache_2_cache_time
+            ) + cache_miss_time
+
+            output.write(f"AMAT: {cache_hit_time + miss_rate * miss_penalty :.2f} ns\n")
             output.write(f"Coherence Results:\n\n")
             output.write(f"BusRdX: {bus.bus_stats["reads"]}\n")
             output.write(f"BusWrX: {bus.bus_stats["writes"]}\n")
