@@ -114,13 +114,19 @@ def main():
             output.write(f"Hit Rate: {hit_rate * 100:.2f}%\n")
             output.write(f"Miss Rate: {miss_rate * 100:.2f}%\n\n")
             total_transfers = main_memory.TOTAL_ACCESS + bus.bus_stats["cache_2_cache"]
+            mem_weight = main_memory.TOTAL_ACCESS / total_transfers
+            c2c_weight = bus.bus_stats["cache_2_cache"] / total_transfers
             miss_penalty = (
-                (main_memory.TOTAL_ACCESS // total_transfers) * MAIN_MEMORY_ACCESS_TIME
-                + (bus.bus_stats["cache_2_cache"] // total_transfers)
-                * cache_2_cache_time
+                mem_weight * MAIN_MEMORY_ACCESS_TIME + c2c_weight * cache_2_cache_time
             ) + cache_miss_time
+            write_through_penalty = 0
+            if cache.write_policy == "write_through":
+                write_through_penalty = (
+                    bus.bus_stats["write_through"] / total_access
+                ) * MAIN_MEMORY_ACCESS_TIME
 
-            output.write(f"AMAT: {cache_hit_time + miss_rate * miss_penalty :.2f} ns\n")
+            AMAT = cache_hit_time + (miss_rate * miss_penalty) + write_through_penalty
+            output.write(f"AMAT: {AMAT:.2f} ns\n")
             output.write(f"Coherence Results:\n\n")
             output.write(f"BusRdX: {bus.bus_stats["reads"]}\n")
             output.write(f"BusWrX: {bus.bus_stats["writes"]}\n")

@@ -1,37 +1,37 @@
 Cache Configuration -> 
 
-Number of Cores: 4
+Number of Cores: 2
 Cache Size: 32 KB
 Block Size: 64 B
 Associativity: 4-way
 Replacement: LRU
-Write Policy: write_through
-Write Allocate: yes
+Write Policy: write_back
+Write Allocate: no
 Coherence Protocol: MOESI
 -----------------------------
 Statistics -> 
 
-Total Accesses: 19
-Total Memory Accesses: 14
-Reads: 7
-Writes: 12
+Total Accesses: 32
+Total Memory Accesses: 32
+Reads: 0
+Writes: 32
 
-Hits: 14
-Misses: 5
+Hits: 0
+Misses: 32
 Dirty Evictions: 0
 
-Compulsory Misses: 5
+Compulsory Misses: 32
 Conflict Misses: 0
 Capacity Misses: 0
 
-Hit Rate: 73.68%
-Miss Rate: 26.32%
+Hit Rate: 0.00%
+Miss Rate: 100.00%
 
-AMAT: 30.95 ns
+AMAT: 112.00 ns
 Coherence Results:
 
-BusRdX: 2
-BusWrX: 3
+BusRdX: 0
+BusWrX: 0
 BusWrXu: 0
 
 Invalidations: 0
@@ -40,24 +40,9 @@ Cache-to-Cache Transfers: 0
 
 --- Core 0 --- 
 
-set 0:
-[Tag=80 | State=M]
-[Tag=88 | State=M]
-[Tag=0 | State=M]
-set 3:
-[Tag=0 | State=M]
-set 4:
-[Tag=0 | State=M]
+
 
 --- Core 1 --- 
-
-
-
---- Core 2 --- 
-
-
-
---- Core 3 --- 
 
 
 
